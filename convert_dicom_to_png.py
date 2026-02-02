@@ -75,7 +75,7 @@ def convert_dataset(input_dir: str, output_dir: str = None, keep_original: bool 
         else:
             failed += 1
     
-    print(f"\n✅ Conversion complete!")
+    print(f"\nConversion complete!")
     print(f"  Converted: {converted} files")
     print(f"  Failed: {failed} files")
     print(f"  Output: {output_path}")

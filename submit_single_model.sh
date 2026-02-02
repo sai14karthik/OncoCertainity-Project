@@ -140,10 +140,10 @@ echo "=========================================="
 echo "Both orders (${MOD1}→${MOD2} and ${MOD2}→${MOD1}): Exit code \$EXIT_CODE"
 
 if [ \$EXIT_CODE -eq 0 ]; then
-    echo "✅ Both orders completed successfully!"
+    echo "Both orders completed successfully!"
     exit 0
 else
-    echo "❌ Run failed"
+    echo "Run failed"
     exit 1
 fi
 EOF
@@ -178,10 +178,10 @@ echo "=========================================="
 echo "Both orders (${MOD1}→${MOD2} and ${MOD2}→${MOD1}): Exit code \$EXIT_CODE"
 
 if [ \$EXIT_CODE -eq 0 ]; then
-    echo "✅ Both orders completed successfully!"
+    echo "Both orders completed successfully!"
     exit 0
 else
-    echo "❌ Run failed"
+    echo "Run failed"
     exit 1
 fi
 EOF
@@ -193,7 +193,7 @@ rm -f "$JOB_SCRIPT"
 echo "    Job $JOB_ID submitted (both orders)"
 echo ""
 
-echo "✅ Job submitted with both orders:"
+echo "Job submitted with both orders:"
 echo "   Job ID: $JOB_ID"
 echo "   Forward (${MOD1}→${MOD2}) and Reverse (${MOD2}→${MOD1})"
 echo ""
