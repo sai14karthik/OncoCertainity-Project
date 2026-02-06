@@ -2,7 +2,7 @@
 # Test a single model locally on sample data (both forward and reverse orders)
 # Usage: ./test_single_model_local.sh <model_name> <model_arch> <data_root> <dataset_config> <class1> <class2> [--max_samples N] [modality1] [modality2] ...
 # Example: ./test_single_model_local.sh openai/clip-vit-base-patch32 clip data data/dataset_config.yaml high_grade low_grade --max_samples 10 CT PET
-#          ./test_single_model_local.sh microsoft/llava-med-v1.5-mistral-7b llava_med data data/dataset_config.yaml class0 class1 --max_samples 5 CT PET
+#          ./test_single_model_local.sh openai/clip-vit-base-patch32 clip data2 data2/tcga_kirp_config.yaml early_stage advanced_stage --max_samples 10 CT MR
 
 # Parse arguments
 if [ $# -lt 6 ]; then
@@ -115,7 +115,9 @@ echo ""
 echo "=========================================="
 echo "Test Summary"
 echo "=========================================="
-echo "Both orders (${MOD1}→${MOD2} and ${MOD2}→${MOD1}): Exit code $EXIT_CODE"
+ORDER_FWD=$(IFS='→'; echo "${MODALITIES[*]}")
+ORDER_REV=$(IFS='→'; echo "${REVERSED_MODALITIES[*]}")
+echo "Both orders (${ORDER_FWD} and ${ORDER_REV}): Exit code $EXIT_CODE"
 
 if [ $EXIT_CODE -eq 0 ]; then
     echo "Both orders completed successfully!"

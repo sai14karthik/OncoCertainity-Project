@@ -47,6 +47,10 @@ checkpoints/
 !data/dataset_config.yaml
 !data/.gitkeep
 data/Lung-PET-CT-Dx/
+# data2/ - exclude large image folders but keep config/metadata
+data2/TCGA-KIRP/
+!data2/*.yaml
+!data2/*.csv
 
 # Results and outputs
 results/

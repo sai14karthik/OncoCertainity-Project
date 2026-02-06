@@ -971,14 +971,15 @@ def print_evaluation_results(evaluation_results: Dict):
         print(f"Total Modalities: {len(modalities)}")
         if len(modalities) > 1:
             print(f"\nSequential Processing Pattern:")
+            steps = []
             for i, mod in enumerate(modalities):
-                if i == 0:
-                    print(f"  Step {i+1}: {mod} (alone)")
-                else:
+                steps.append((i + 1, f"{mod} (alone)"))
+                if i > 0:
                     context_mods = modalities[:i]
                     context_str = "+".join(context_mods)
-                    print(f"  Step {i+1}: {mod} (alone)")
-                    print(f"  Step {len(modalities)+i}: {mod} with {context_str} context ({context_str}+{mod})")
+                    steps.append((len(modalities) + i, f"{mod} with {context_str} context ({context_str}+{mod})"))
+            for step_num, desc in sorted(steps, key=lambda x: x[0]):
+                print(f"  Step {step_num}: {desc}")
     print("="*80)
     
     # ============================================================================
@@ -3603,16 +3604,14 @@ def save_results(results: Dict, output_path: str):
             # For any other type, try to convert to string
             try:
                 return str(obj)
-            except:
+            except Exception:
                 return None
 
     try:
-        serializable_results = convert_to_serializable(results)
-        
-        with open(output_path, 'w') as f:
-            json.dump(serializable_results, f, indent=2)
-        
-        print(f"Results saved to {output_path}")
+    serializable_results = convert_to_serializable(results)
+        with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(serializable_results, f, indent=2)
+    print(f"Results saved to {output_path}")
     except (TypeError, ValueError) as e:
         # More detailed error message to help debug serialization issues
         print(f"ERROR: Failed to save results to {output_path}: {e}", file=sys.stderr)

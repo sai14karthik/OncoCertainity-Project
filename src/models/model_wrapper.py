@@ -572,8 +572,63 @@ class MultimodalModelWrapper:
                 keyword in first_class.lower() + second_class.lower()
                 for keyword in ["high_grade", "low_grade", "grade"]
             )
-            
-            if is_cancer_grading:
+            # Detect if this is stage-based (early_stage vs advanced_stage) - e.g. TCGA-KIRP
+            is_stage_based = (
+                "early_stage" in (first_class + second_class).lower()
+                and "advanced_stage" in (first_class + second_class).lower()
+            )
+
+            if is_stage_based:
+                # Stage-specific prompts: early_stage = Stage I–II, advanced_stage = Stage III–IV
+                is_early_first = "early" in first_class.lower()
+                if context_prefix:
+                    if is_early_first:
+                        first_prompts = [
+                            f"{context_prefix}{current_modality} shows {first_class} cancer (Stage I–II) with limited tumor involvement and better prognosis",
+                            f"{context_prefix}{current_modality} shows {first_class} with smaller primary tumor, localized growth, and no distant metastasis",
+                            f"{context_prefix}{current_modality} shows {first_class} early-stage disease with lower metabolic burden",
+                        ]
+                        second_prompts = [
+                            f"{context_prefix}{current_modality} shows {second_class} cancer (Stage III–IV) with extensive tumor involvement and higher risk",
+                            f"{context_prefix}{current_modality} shows {second_class} with larger tumor, lymph node or distant spread",
+                            f"{context_prefix}{current_modality} shows {second_class} advanced-stage disease with higher metabolic burden",
+                        ]
+                    else:
+                        first_prompts = [
+                            f"{context_prefix}{current_modality} shows {first_class} cancer (Stage III–IV) with extensive tumor involvement and higher risk",
+                            f"{context_prefix}{current_modality} shows {first_class} with larger tumor, lymph node or distant spread",
+                            f"{context_prefix}{current_modality} shows {first_class} advanced-stage disease with higher metabolic burden",
+                        ]
+                        second_prompts = [
+                            f"{context_prefix}{current_modality} shows {second_class} cancer (Stage I–II) with limited tumor involvement and better prognosis",
+                            f"{context_prefix}{current_modality} shows {second_class} with smaller primary tumor, localized growth, and no distant metastasis",
+                            f"{context_prefix}{current_modality} shows {second_class} early-stage disease with lower metabolic burden",
+                        ]
+                else:
+                    if is_early_first:
+                        first_prompts = [
+                            f"a {current_modality} scan showing {first_class} cancer (Stage I–II) with limited tumor involvement",
+                            f"a {current_modality} imaging scan with {first_class} demonstrating smaller tumor and localized growth",
+                            f"a {current_modality} slice classified as {first_class} early-stage disease",
+                        ]
+                        second_prompts = [
+                            f"a {current_modality} scan showing {second_class} cancer (Stage III–IV) with extensive tumor involvement",
+                            f"a {current_modality} imaging scan with {second_class} demonstrating larger tumor or spread",
+                            f"a {current_modality} slice classified as {second_class} advanced-stage disease",
+                        ]
+                    else:
+                        first_prompts = [
+                            f"a {current_modality} scan showing {first_class} cancer (Stage III–IV) with extensive tumor involvement",
+                            f"a {current_modality} imaging scan with {first_class} demonstrating larger tumor or spread",
+                            f"a {current_modality} slice classified as {first_class} advanced-stage disease",
+                        ]
+                        second_prompts = [
+                            f"a {current_modality} scan showing {second_class} cancer (Stage I–II) with limited tumor involvement",
+                            f"a {current_modality} imaging scan with {second_class} demonstrating smaller tumor and localized growth",
+                            f"a {current_modality} slice classified as {second_class} early-stage disease",
+                        ]
+                prompt_weights = [1.0] * len(first_prompts)
+            elif is_cancer_grading:
                 # Enhanced cancer grade-specific prompts with medical terminology (generic for any cancer type)
                 # High-grade typically: larger tumors, more aggressive, poor differentiation, invasion
                 # Low-grade typically: smaller tumors, less aggressive, well-differentiated, localized
