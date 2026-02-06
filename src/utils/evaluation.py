@@ -223,9 +223,17 @@ def aggregate_patient_predictions(patient_slices: List[Dict]) -> Dict:
     else:
         aggregated_pred = max(class_weights.items(), key=lambda x: x[1])[0]
     
-    # Calculate aggregated confidence (normalized)
-    if total_confidence > 0:
-        aggregated_conf = class_weights[aggregated_pred] / total_confidence
+    # Calculate aggregated confidence
+    # Use average confidence of slices (or of winning-class slices) so result is in [0,1] and reflects real certainty.
+    # Avoid returning 1.0 when all slices agree with high conf (weight/total_weight would be 1.0).
+    if len(patient_slices) == 1:
+        # Single slice: use its original confidence directly
+        aggregated_conf = patient_slices[0].get('confidence', 0.5)
+        aggregated_conf = max(0.0, min(1.0, float(aggregated_conf)))  # Clamp to valid range
+    elif class_confidences[aggregated_pred]:
+        # Multiple slices: use mean confidence of slices that voted for the winning class (reflects real certainty)
+        aggregated_conf = sum(class_confidences[aggregated_pred]) / len(class_confidences[aggregated_pred])
+        aggregated_conf = max(0.0, min(1.0, float(aggregated_conf)))
     else:
         aggregated_conf = 0.5
     
@@ -920,6 +928,56 @@ def evaluate_sequential_modalities(
     
     # Calculate patient-level results (mandatory requirement)
     patient_level_results = calculate_patient_level_results(results, modalities)
+    
+    # Recalculate disagreement rates from patient-level aggregated predictions (more accurate)
+    # This fixes the issue where slice-level disagreement doesn't reflect patient-level reality
+    if len(modalities) >= 2 and patient_level_results:
+        # Calculate patient-level disagreement for each pair
+        for i in range(len(modalities)):
+            for j in range(i + 1, len(modalities)):
+                mod_i = modalities[i]
+                mod_j = modalities[j]
+                
+                if mod_i in patient_level_results and mod_j in patient_level_results:
+                    mod_i_patient_preds = patient_level_results[mod_i].get('full_predictions', [])
+                    mod_j_patient_preds = patient_level_results[mod_j].get('full_predictions', [])
+                    
+                    if mod_i_patient_preds and mod_j_patient_preds:
+                        # Extract patient IDs
+                        patient_ids = [p.get('patient_id') for p in mod_i_patient_preds if isinstance(p, dict) and p.get('patient_id') is not None]
+                        
+                        # Calculate patient-level agreement (uses aggregated predictions)
+                        patient_agreement = analyze_modality_agreement(mod_i_patient_preds, mod_j_patient_preds, patient_ids)
+                        
+                        # Update pairwise_agreements with patient-level disagreement rate
+                        pair_key = tuple(sorted([mod_i, mod_j]))
+                        if pair_key in pairwise_agreements:
+                            # Update disagreement rate to patient-level value
+                            pairwise_agreements[pair_key]['disagreement_rate'] = patient_agreement.get('disagreement_rate', 0.0)
+                        
+                        # Update backward compatibility variable if this is the first pair
+                        if i == 0 and j == 1 and agreement_metrics:
+                            agreement_metrics['disagreement_rate'] = patient_agreement.get('disagreement_rate', 0.0)
+        
+        # Update disagreement rates in step_results based on patient-level calculations
+        for mod in modalities:
+            if mod not in step_results:
+                continue
+            
+            disagreement_rates = []
+            for other_mod in modalities:
+                if other_mod == mod:
+                    continue
+                
+                pair_key = tuple(sorted([mod, other_mod]))
+                if pair_key in pairwise_agreements:
+                    agreement = pairwise_agreements[pair_key]
+                    disagreement_rate = agreement.get('disagreement_rate', 0.0)
+                    disagreement_rates.append(disagreement_rate)
+            
+            if disagreement_rates:
+                avg_disagreement = sum(disagreement_rates) / len(disagreement_rates)
+                step_results[mod]['disagreement_rate'] = avg_disagreement
     
     return {
         'step_results': step_results,
@@ -3608,10 +3666,10 @@ def save_results(results: Dict, output_path: str):
                 return None
 
     try:
-    serializable_results = convert_to_serializable(results)
+        serializable_results = convert_to_serializable(results)
         with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(serializable_results, f, indent=2)
-    print(f"Results saved to {output_path}")
+            json.dump(serializable_results, f, indent=2)
+        print(f"Results saved to {output_path}")
     except (TypeError, ValueError) as e:
         # More detailed error message to help debug serialization issues
         print(f"ERROR: Failed to save results to {output_path}: {e}", file=sys.stderr)

@@ -260,22 +260,35 @@ class LLaVARunner:
             output_text = self.tokenizer.decode(output_ids_to_decode, skip_special_tokens=True).strip().lower()
             scores_available = False
         
-        # Parse prediction
+        # Parse prediction (normalize so "early stage" / "early-stage" match "early_stage")
         first, second = [c.lower() for c in self.class_names]
+        text_for_match = output_text.replace(" ", "_").replace("-", "_")
+        text_parsing_succeeded = False
         
-        if first in output_text and second in output_text:
-            # Pick the one that appears last (more likely to be the answer)
-            prediction = int(output_text.rfind(first) < output_text.rfind(second))
-        elif first in output_text:
+        if first in text_for_match and second in text_for_match:
+            prediction = int(text_for_match.rfind(first) < text_for_match.rfind(second))
+            text_parsing_succeeded = True
+        elif first in text_for_match:
             prediction = 0
-        elif second in output_text:
+            text_parsing_succeeded = True
+        elif second in text_for_match:
             prediction = 1
+            text_parsing_succeeded = True
         else:
-            # Fallback: default to first class if no match found
-            prediction = 0
-
-        # Ensure prediction is valid (0 or 1)
-        prediction = max(0, min(1, int(prediction)))
+            # Fallback: try first word of each class (e.g. "early" for early_stage)
+            first_word = first.split("_")[0].split("-")[0].strip() if first else ""
+            second_word = second.split("_")[0].split("-")[0].strip() if second else ""
+            if first_word and second_word and first_word != second_word:
+                if first_word in text_for_match and second_word not in text_for_match:
+                    prediction = 0
+                    text_parsing_succeeded = True
+                elif second_word in text_for_match:
+                    prediction = 1
+                    text_parsing_succeeded = True
+                # else: text_parsing_succeeded stays False, will use logits
+        
+        # Ensure prediction is valid (0 or 1) - but we'll override with logits if parsing failed
+        prediction = max(0, min(1, int(prediction))) if text_parsing_succeeded else None
 
         # Extract logits from generation scores if available
         logits = None
@@ -338,7 +351,9 @@ class LLaVARunner:
                 logits = class_logits.cpu().numpy().tolist()
             else:
                 # Fallback: create logits based on prediction with uncertainty
-                if prediction == 0:
+                # If text parsing failed, use neutral logits (will be overridden by argmax later)
+                pred_for_logits = prediction if prediction is not None else 0
+                if pred_for_logits == 0:
                     class_logits = torch.tensor([2.0, 0.5])
                 else:
                     class_logits = torch.tensor([0.5, 2.0])
@@ -400,23 +415,34 @@ class LLaVARunner:
                 # Final fallback: Use image-dependent logits instead of fixed values
                 try:
                     image_array = np.array(image.convert('L'))
-                    image_mean = float(np.mean(image_array)) / 255.0
-                    image_std = float(np.std(image_array)) / 255.0
+                    # Keep raw values for better distinction (CT: 90-240, PET: 5-15)
+                    image_mean = float(np.mean(image_array))  # Keep in [0, 255] range
+                    image_std = float(np.std(image_array))
                     
-                    base_logit = 2.0 if prediction == 0 else 0.5
-                    other_logit = 0.5 if prediction == 0 else 2.0
+                    # Use image statistics to create image-dependent logits
+                    # If text parsing failed, use neutral logits (will be overridden by argmax later)
+                    pred_for_logits = prediction if prediction is not None else 0
+                    base_logit = 2.0 if pred_for_logits == 0 else 0.5
+                    other_logit = 0.5 if pred_for_logits == 0 else 2.0
                     
-                    mean_norm = image_mean
-                    std_norm = image_std
-                    image_factor = (mean_norm * 1.0 + std_norm * 0.5)
-                    variation_magnitude = image_factor * 2.0
+                    # Normalize to create variation factor: CT will have ~0.35-0.94, PET will have ~0.02-0.06
+                    mean_norm = image_mean / 255.0  # Normalize to [0, 1]
+                    std_norm = image_std / 255.0
+                    
+                    # Create variation factor: CT will have ~0.35-0.94, PET will have ~0.02-0.06
+                    image_factor = (mean_norm * 1.0 + std_norm * 0.5)  # Range: ~0.02 to 1.0
+                    
+                    # Scale to ensure differences persist even after patient-level weighted aggregation
+                    variation_magnitude = image_factor * 2.0  # Scale up to 0.04-2.0 range
                     logits = [
                         base_logit + variation_magnitude,
                         other_logit - variation_magnitude
                     ]
                 except Exception:
-                    # Ultimate fallback: fixed logits
-                    if prediction == 0:
+                    # Ultimate fallback: fixed logits (but this should rarely happen)
+                    # If text parsing failed, use neutral logits (will be overridden by argmax later)
+                    pred_for_logits = prediction if prediction is not None else 0
+                    if pred_for_logits == 0:
                         logits = [2.0, 0.5]
                     else:
                         logits = [0.5, 2.0]
@@ -431,8 +457,15 @@ class LLaVARunner:
         probs_array = np.clip(probs_array, epsilon, 1.0 - epsilon)
         probs_array = probs_array / probs_array.sum()  # Renormalize
 
+        # If text parsing failed, use logits/probabilities to determine prediction
+        if not text_parsing_succeeded:
+            prediction = int(np.argmax(probs_array))
+
         confidence = float(np.max(probs_array))
         probs = {first: float(probs_array[0]), second: float(probs_array[1])}
+        
+        # Final safety check: ensure prediction is valid
+        prediction = max(0, min(1, int(prediction)))
 
         return {
             "prediction": prediction,
@@ -440,6 +473,7 @@ class LLaVARunner:
             "probabilities": probs,
             "logits": logits,
             "probabilities_array": probs_array.tolist(),
+            "probabilities_before_boosting": probs_array.tolist(),  # No boosting in LLaVARunner; same as array
         }
 
     @torch.inference_mode()

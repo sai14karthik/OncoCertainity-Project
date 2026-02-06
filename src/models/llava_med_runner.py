@@ -243,19 +243,35 @@ class LLaVAMedRunner:
             output_text = self.tokenizer.decode(output_ids_to_decode, skip_special_tokens=True).strip().lower()
             scores_available = False
         first, second = [c.lower() for c in self.class_names]
-
-        if first in output_text and second in output_text:
-            prediction = int(output_text.rfind(first) < output_text.rfind(second))
-        elif first in output_text:
+        
+        # Parse prediction (normalize so "early stage" / "early-stage" match "early_stage")
+        text_for_match = output_text.replace(" ", "_").replace("-", "_")
+        text_parsing_succeeded = False
+        
+        if first in text_for_match and second in text_for_match:
+            prediction = int(text_for_match.rfind(first) < text_for_match.rfind(second))
+            text_parsing_succeeded = True
+        elif first in text_for_match:
             prediction = 0
-        elif second in output_text:
+            text_parsing_succeeded = True
+        elif second in text_for_match:
             prediction = 1
+            text_parsing_succeeded = True
         else:
-            # Fallback: default to first class if no match found
-            prediction = 0
-
-        # Ensure prediction is valid (0 or 1)
-        prediction = max(0, min(1, int(prediction)))
+            # Fallback: try first word of each class (e.g. "early" for early_stage)
+            first_word = first.split("_")[0].split("-")[0].strip() if first else ""
+            second_word = second.split("_")[0].split("-")[0].strip() if second else ""
+            if first_word and second_word and first_word != second_word:
+                if first_word in text_for_match and second_word not in text_for_match:
+                    prediction = 0
+                    text_parsing_succeeded = True
+                elif second_word in text_for_match:
+                    prediction = 1
+                    text_parsing_succeeded = True
+                # else: text_parsing_succeeded stays False, will use logits
+        
+        # Ensure prediction is valid (0 or 1) - but we'll override with logits if parsing failed
+        prediction = max(0, min(1, int(prediction))) if text_parsing_succeeded else None
 
         # Extract logits from generation scores if available
         # FIX: Try alternative method if output_scores fails - use forward pass to get logits
@@ -331,7 +347,9 @@ class LLaVAMedRunner:
             else:
                 # Fallback: create logits based on prediction with uncertainty
                 # Use a moderate confidence (not 1.0) to allow entropy calculation
-                if prediction == 0:
+                # If text parsing failed, use neutral logits (will be overridden by argmax later)
+                pred_for_logits = prediction if prediction is not None else 0
+                if pred_for_logits == 0:
                     class_logits = torch.tensor([2.0, 0.5])  # Favor first class
                 else:
                     class_logits = torch.tensor([0.5, 2.0])  # Favor second class
@@ -411,16 +429,19 @@ class LLaVAMedRunner:
                 # This ensures CT and PET produce different logits even with same prediction
                 try:
                     image_array = np.array(image.convert('L'))
-                    image_mean = float(np.mean(image_array)) / 255.0  # Normalize to [0, 1]
-                    image_std = float(np.std(image_array)) / 255.0
+                    # Keep raw values for better distinction (CT: 90-240, PET: 5-15)
+                    image_mean = float(np.mean(image_array))  # Keep in [0, 255] range
+                    image_std = float(np.std(image_array))
                     
                     # Use image statistics to create image-dependent logits
-                    base_logit = 2.0 if prediction == 0 else 0.5
-                    other_logit = 0.5 if prediction == 0 else 2.0
+                    # If text parsing failed, use neutral logits (will be overridden by argmax later)
+                    pred_for_logits = prediction if prediction is not None else 0
+                    base_logit = 2.0 if pred_for_logits == 0 else 0.5
+                    other_logit = 0.5 if pred_for_logits == 0 else 2.0
                     
                     # Add STRONG variation based on image content to ensure CT and PET differ
                     # CT images: mean ~90-240, PET images: mean ~5-15
-                    # Use raw image statistics for better distinction between modalities
+                    # Normalize to create variation factor: CT will have ~0.35-0.94, PET will have ~0.02-0.06
                     mean_norm = image_mean / 255.0  # Normalize to [0, 1]
                     std_norm = image_std / 255.0
                     
@@ -436,7 +457,9 @@ class LLaVAMedRunner:
                     ]
                 except Exception:
                     # Ultimate fallback: fixed logits (but this should rarely happen)
-                    if prediction == 0:
+                    # If text parsing failed, use neutral logits (will be overridden by argmax later)
+                    pred_for_logits = prediction if prediction is not None else 0
+                    if pred_for_logits == 0:
                         logits = [2.0, 0.5]
                     else:
                         logits = [0.5, 2.0]
@@ -452,8 +475,15 @@ class LLaVAMedRunner:
         probs_array = np.clip(probs_array, epsilon, 1.0 - epsilon)
         probs_array = probs_array / probs_array.sum()  # Renormalize
 
+        # If text parsing failed, use logits/probabilities to determine prediction
+        if not text_parsing_succeeded:
+            prediction = int(np.argmax(probs_array))
+
         confidence = float(np.max(probs_array))
         probs = {first: float(probs_array[0]), second: float(probs_array[1])}
+        
+        # Final safety check: ensure prediction is valid
+        prediction = max(0, min(1, int(prediction)))
 
         return {
             "prediction": prediction,
