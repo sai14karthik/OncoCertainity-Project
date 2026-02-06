@@ -1115,7 +1115,7 @@ def print_evaluation_results(evaluation_results: Dict):
             print("• Avg Conf (Wrong): Average confidence when prediction is incorrect")
             print("• Overconf Severity: Average confidence of high-confidence incorrect predictions")
             print("  → Higher values indicate more severe overconfidence (model very wrong but very confident)")
-            print("  → Note: With 1 slice/patient, aggregated confidence is 1.0, so this can exceed slice-level counts.")
+            print("  → Aggregated confidence is the mean of winning-class slice confidences (typically <1.0).")
         else:
             print("Warning: Patient-level results not available.")
     
