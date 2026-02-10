@@ -4,7 +4,7 @@ Convert DICOM files to PNG images for consistency or performance.
 
 This script:
 1. Reads DICOM files from any organized dataset
-2. Converts them to PNG images using the same logic as load_dicom_image()
+2. Converts them to PNG using load_dicom_image() (VOI LUT or windowing, 0–255, MONOCHROME1 inversion, first frame for multi-frame)
 3. Saves PNG files in the same structure
 4. Preserves patient IDs and class organization
 

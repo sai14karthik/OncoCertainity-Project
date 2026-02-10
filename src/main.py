@@ -991,6 +991,17 @@ def main():
         # Count results by modality
         total_results = sum(len(preds) for preds in results.values())
     
+        # Run fingerprint: verifies this run used this model (different model or order => different hash)
+        if total_results > 0:
+            _sample_preds = []
+            for _cid, preds in list(results.items())[:20]:
+                for p in preds[:1]:
+                    _sample_preds.append(p.get('prediction'))
+                    _sample_preds.append(round(p.get('confidence', 0), 4))
+            import hashlib
+            _fp = hashlib.sha256(str(_sample_preds).encode()).hexdigest()[:12]
+            print(f"\n[Run fingerprint] model={args.model_name} predictions_hash={_fp}\n", flush=True)
+    
         # Count by step type (for logging/debugging)
         step_counts = {}
         for case_id, preds in results.items():
@@ -1060,6 +1071,7 @@ def main():
                         mod1 = modalities[i]
                         mod2 = modalities[j]
                         pair_key = (mod1, mod2)
+                        pair_key_canonical = tuple(sorted([mod1, mod2]))  # Match evaluation's key
                         
                         # Find common patients for this pair
                         common_patient_ids = sorted(set(patient_mod_preds[mod1].keys()) & set(patient_mod_preds[mod2].keys()))
@@ -1129,10 +1141,13 @@ def main():
                         
                         # Analyze patient-level vs slice-level agreement for this pair
                         if patient_level_mod1 and patient_level_mod2:
-                            # Get slice-level agreement for this specific pair
+                            # Get slice-level agreement for this specific pair (use canonical key)
                             slice_level_agreement = {}
-                            if pair_key in evaluation_results.get('pairwise_agreements', {}):
-                                slice_level_agreement = evaluation_results['pairwise_agreements'][pair_key]
+                            pairwise = evaluation_results.get('pairwise_agreements', {})
+                            if pair_key_canonical in pairwise:
+                                slice_level_agreement = pairwise[pair_key_canonical]
+                            elif pair_key in pairwise:
+                                slice_level_agreement = pairwise[pair_key]
                             elif 'agreement_metrics' in evaluation_results:
                                 # Fallback to backward compatibility variable
                                 slice_level_agreement = evaluation_results.get('agreement_metrics', {})

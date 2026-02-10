@@ -265,8 +265,15 @@ def evaluate_sequential_modalities(
         modalities: Ordered list of modalities supplied via CLI (supports N modalities)
     
     Returns:
-        Dictionary with certainty metrics for each step (accuracy included for reference only)
+        Dictionary with certainty metrics for each step (accuracy included for reference only).
+    Note:
+        Pairwise keys (e.g. pairwise_agreements) use canonical key tuple(sorted([mod_i, mod_j]))
+        so (CT, MR) and (MR, CT) refer to the same pair.
     """
+    if not results:
+        return {'step_results': {}, 'patient_level_results': {}, 'modalities': modalities or []}
+    if not modalities:
+        return {'step_results': {}, 'patient_level_results': {}, 'modalities': []}
     # Organize by modality combinations
     # Dynamic step structure:
     # - Each modality alone: "Mod1", "Mod2", "Mod3", etc.
@@ -429,22 +436,19 @@ def evaluate_sequential_modalities(
                         continue
                     
                     patient_ids = extract_patient_ids_from_predictions(mod_i_preds)
-                    
+                    pair_key = tuple(sorted([mod_i, mod_j]))  # Canonical key so (MR,CT) and (CT,MR) match
                     # Pairwise agreement
                     agreement = analyze_modality_agreement(mod_i_preds, mod_j_preds, patient_ids)
-                    pairwise_agreements[(mod_i, mod_j)] = agreement
-                    
+                    pairwise_agreements[pair_key] = agreement
                     # Logit similarity
                     similarity = analyze_logit_similarity(mod_i_preds, mod_j_preds, patient_ids)
-                    pairwise_logit_similarities[(mod_i, mod_j)] = similarity
-                    
+                    pairwise_logit_similarities[pair_key] = similarity
                     # Confidence comparison
                     comparison = analyze_modality_confidence_comparison(mod_i_preds, mod_j_preds, patient_ids)
-                    pairwise_confidence_comparisons[(mod_i, mod_j)] = comparison
-                    
+                    pairwise_confidence_comparisons[pair_key] = comparison
                     # Dominance analysis
                     dominance = analyze_modality_dominance(mod_i_preds, mod_j_preds, patient_ids)
-                    pairwise_dominance[(mod_i, mod_j)] = dominance
+                    pairwise_dominance[pair_key] = dominance
     
     # ============================================================================
     # 2. SEQUENTIAL ANALYSIS: How each modality affects the next
@@ -640,18 +644,15 @@ def evaluate_sequential_modalities(
         second_mod = modalities[1]  # Second modality (generic, not hardcoded to "mod2")
         
         # Get first pair analysis for backward compatibility only
-        # NOTE: For N modalities, use pairwise_agreements[(mod_i, mod_j)] for any pair
-        if (first_mod, second_mod) in pairwise_agreements:
-            agreement_metrics = pairwise_agreements[(first_mod, second_mod)]
-        
-        if (first_mod, second_mod) in pairwise_logit_similarities:
-            logit_similarity_analysis = pairwise_logit_similarities[(first_mod, second_mod)]
-        
-        if (first_mod, second_mod) in pairwise_confidence_comparisons:
-            mod2_vs_mod1_analysis = pairwise_confidence_comparisons[(first_mod, second_mod)]
-        
-        if (first_mod, second_mod) in pairwise_dominance:
-            mod2_dominance_analysis = pairwise_dominance[(first_mod, second_mod)]
+        first_pair_key = tuple(sorted([first_mod, second_mod]))
+        if first_pair_key in pairwise_agreements:
+            agreement_metrics = pairwise_agreements[first_pair_key]
+        if first_pair_key in pairwise_logit_similarities:
+            logit_similarity_analysis = pairwise_logit_similarities[first_pair_key]
+        if first_pair_key in pairwise_confidence_comparisons:
+            mod2_vs_mod1_analysis = pairwise_confidence_comparisons[first_pair_key]
+        if first_pair_key in pairwise_dominance:
+            mod2_dominance_analysis = pairwise_dominance[first_pair_key]
         
         # Get combined analysis for first combination (A+B)
         # NOTE: For N modalities, use combined_agreements for any combination (A+B, A+B+C, etc.)
@@ -887,11 +888,9 @@ def evaluate_sequential_modalities(
             else:
                 # Fallback: use first pair if available
                 if len(modalities) >= 2:
-                    mod1 = modalities[0]
-                    mod2 = modalities[1]
-                    if (mod1, mod2) in pairwise_agreements:
-                        agreement = pairwise_agreements[(mod1, mod2)]
-                        step_results[mod]['disagreement_rate'] = agreement.get('disagreement_rate', 0.0)
+                    fpk = tuple(sorted([modalities[0], modalities[1]]))
+                    if fpk in pairwise_agreements:
+                        step_results[mod]['disagreement_rate'] = pairwise_agreements[fpk].get('disagreement_rate', 0.0)
                     else:
                         step_results[mod]['disagreement_rate'] = 0.0
         
@@ -929,10 +928,10 @@ def evaluate_sequential_modalities(
     # Calculate patient-level results (mandatory requirement)
     patient_level_results = calculate_patient_level_results(results, modalities)
     
-    # Recalculate disagreement rates from patient-level aggregated predictions (more accurate)
-    # This fixes the issue where slice-level disagreement doesn't reflect patient-level reality
+    # Disagreement rate: BY DEFINITION patient-level (proportion of patients where
+    # aggregated prediction for modality A != aggregated prediction for modality B).
+    # Do not change to slice-level; this is the intended metric for reporting.
     if len(modalities) >= 2 and patient_level_results:
-        # Calculate patient-level disagreement for each pair
         for i in range(len(modalities)):
             for j in range(i + 1, len(modalities)):
                 mod_i = modalities[i]
@@ -943,21 +942,17 @@ def evaluate_sequential_modalities(
                     mod_j_patient_preds = patient_level_results[mod_j].get('full_predictions', [])
                     
                     if mod_i_patient_preds and mod_j_patient_preds:
-                        # Extract patient IDs
                         patient_ids = [p.get('patient_id') for p in mod_i_patient_preds if isinstance(p, dict) and p.get('patient_id') is not None]
-                        
-                        # Calculate patient-level agreement (uses aggregated predictions)
                         patient_agreement = analyze_modality_agreement(mod_i_patient_preds, mod_j_patient_preds, patient_ids)
-                        
-                        # Update pairwise_agreements with patient-level disagreement rate
+                        patient_disagreement_rate = patient_agreement.get('disagreement_rate', 0.0)
+                        patient_agreement_rate = patient_agreement.get('agreement_rate', 0.0)
                         pair_key = tuple(sorted([mod_i, mod_j]))
                         if pair_key in pairwise_agreements:
-                            # Update disagreement rate to patient-level value
-                            pairwise_agreements[pair_key]['disagreement_rate'] = patient_agreement.get('disagreement_rate', 0.0)
-                        
-                        # Update backward compatibility variable if this is the first pair
+                            pairwise_agreements[pair_key]['disagreement_rate'] = patient_disagreement_rate
+                            pairwise_agreements[pair_key]['agreement_rate'] = patient_agreement_rate
                         if i == 0 and j == 1 and agreement_metrics:
-                            agreement_metrics['disagreement_rate'] = patient_agreement.get('disagreement_rate', 0.0)
+                            agreement_metrics['disagreement_rate'] = patient_disagreement_rate
+                            agreement_metrics['agreement_rate'] = patient_agreement_rate
         
         # Update disagreement rates in step_results based on patient-level calculations
         for mod in modalities:
@@ -1125,7 +1120,7 @@ def print_evaluation_results(evaluation_results: Dict):
     print("\n" + "="*80)
     print("SLICE-LEVEL CERTAINTY METRICS (Reference)")
     print("="*80)
-    
+    # Note: Avg Confidence and Entropy are slice-level; Disagreement is patient-level (by design).
     # Get disagreement rate from agreement metrics (modality pairs)
     disagreement_rate_mod1_vs_mod2 = 0.0
     if agreement_metrics:
@@ -1136,7 +1131,7 @@ def print_evaluation_results(evaluation_results: Dict):
     if mod1_vs_combined_agreement:
         disagreement_rate_mod1_vs_combined = mod1_vs_combined_agreement.get('disagreement_rate', None)
     
-    print(f"{'Modality':<15} {'Avg Confidence':<18} {'Entropy':<15} {'Disagreement Rate':<20}")
+    print(f"{'Modality':<15} {'Avg Confidence':<18} {'Entropy':<15} {'Disagreement (pt-level)':<22}")
     print("-"*80)
     
     # Custom sort order: Individual modalities first (in order), then combinations
@@ -1257,7 +1252,7 @@ def print_evaluation_results(evaluation_results: Dict):
         print("MODALITY AGREEMENT & CERTAINTY EFFECTS")
         print("-"*80)
         disagreement_rate = agreement_metrics.get('disagreement_rate', 0.0)
-        print(f"Disagreement rate: {disagreement_rate:.4f} ({disagreement_rate*100:.1f}% of cases)")
+        print(f"Disagreement rate (patient-level): {disagreement_rate:.4f} ({disagreement_rate*100:.1f}% of patients)")
         
         disagreement_conf_analysis = agreement_metrics.get('disagreement_confidence_analysis', {})
         if disagreement_conf_analysis:
@@ -1274,6 +1269,9 @@ def print_evaluation_results(evaluation_results: Dict):
                 if avg_conf_agree > 0:
                     print(f"Average confidence when agreeing: {avg_conf_agree:.4f}")
                     print(f"Confidence drop on disagreement: {conf_drop:.4f}")
+                elif disagreement_rate >= 1.0:
+                    print(f"Average confidence when agreeing: N/A (no agreeing pairs)")
+                    print(f"Confidence drop on disagreement: N/A")
         
         disagreement_logit_analysis = agreement_metrics.get('disagreement_logit_analysis', {})
         if disagreement_logit_analysis:
@@ -2445,61 +2443,52 @@ def analyze_modality_confidence_comparison(
     Returns:
         Dictionary with modality confidence comparison analysis
     """
-    # Match predictions - aggregate at patient level first
+    # Match predictions by patient_id (robust to different list lengths/order)
     matched_pairs = []
-    if patient_ids is not None:
-        # Group by patient_id (preserve all slices)
-        mod1_by_patient = {}
-        mod2_by_patient = {}
-        
-        for pid, pred in zip(patient_ids, mod1_predictions):
+    mod1_by_patient = {}
+    mod2_by_patient = {}
+    for pred in mod1_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in mod1_by_patient:
                     mod1_by_patient[pid] = []
                 mod1_by_patient[pid].append(pred)
-        
-        for pid, pred in zip(patient_ids, mod2_predictions):
+    for pred in mod2_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in mod2_by_patient:
                     mod2_by_patient[pid] = []
                 mod2_by_patient[pid].append(pred)
-        
-        # Aggregate predictions per patient (weighted by confidence)
-        for pid in set(patient_ids):
-            if pid in mod1_by_patient and pid in mod2_by_patient:
-                mod1_slices = mod1_by_patient[pid]
-                mod2_slices = mod2_by_patient[pid]
-                
-                # Aggregate Mod1: weighted average confidence
-                mod1_aggregated = aggregate_patient_predictions(mod1_slices)
-                
-                # Aggregate Mod2: weighted average confidence
-                mod2_aggregated = aggregate_patient_predictions(mod2_slices)
-                
-                # Create aggregated prediction dicts with full info
-                mod1_pred = {
-                    'prediction': mod1_aggregated['prediction'],
-                    'confidence': mod1_aggregated['confidence'],
-                    'probabilities': mod1_slices[0].get('probabilities', {}) if mod1_slices else {},
-                    'probabilities_array': mod1_slices[0].get('probabilities_array', []) if mod1_slices else [],
-                    'logits': mod1_slices[0].get('logits', []) if mod1_slices else []
-                }
-                
-                mod2_pred = {
-                    'prediction': mod2_aggregated['prediction'],
-                    'confidence': mod2_aggregated['confidence'],
-                    'probabilities': mod2_slices[0].get('probabilities', {}) if mod2_slices else {},
-                    'probabilities_array': mod2_slices[0].get('probabilities_array', []) if mod2_slices else [],
-                    'probabilities_before_boosting': mod2_slices[0].get('probabilities_before_boosting') if mod2_slices else None,
-                    'used_context': mod2_slices[0].get('used_context', False) if mod2_slices else False,
-                    'logits': mod2_slices[0].get('logits', []) if mod2_slices else []
-                }
-                
-                matched_pairs.append((mod1_pred, mod2_pred))
-    else:
-        min_len = min(len(mod1_predictions), len(mod2_predictions))
-        matched_pairs = list(zip(mod1_predictions[:min_len], mod2_predictions[:min_len]))
-    
+    common_patient_ids = sorted(set(mod1_by_patient.keys()) & set(mod2_by_patient.keys()))
+    for pid in common_patient_ids:
+        mod1_slices = mod1_by_patient[pid]
+        mod2_slices = mod2_by_patient[pid]
+        mod1_aggregated = aggregate_patient_predictions(mod1_slices)
+        mod2_aggregated = aggregate_patient_predictions(mod2_slices)
+        mod1_pred = {
+            'prediction': mod1_aggregated['prediction'],
+            'confidence': mod1_aggregated['confidence'],
+            'probabilities': mod1_slices[0].get('probabilities', {}) if mod1_slices else {},
+            'probabilities_array': mod1_slices[0].get('probabilities_array', []) if mod1_slices else [],
+            'logits': mod1_slices[0].get('logits', []) if mod1_slices else []
+        }
+        mod2_pred = {
+            'prediction': mod2_aggregated['prediction'],
+            'confidence': mod2_aggregated['confidence'],
+            'probabilities': mod2_slices[0].get('probabilities', {}) if mod2_slices else {},
+            'probabilities_array': mod2_slices[0].get('probabilities_array', []) if mod2_slices else [],
+            'probabilities_before_boosting': mod2_slices[0].get('probabilities_before_boosting') if mod2_slices else None,
+            'used_context': mod2_slices[0].get('used_context', False) if mod2_slices else False,
+            'logits': mod2_slices[0].get('logits', []) if mod2_slices else []
+        }
+        matched_pairs.append((mod1_pred, mod2_pred))
+    if not matched_pairs and (mod1_predictions or mod2_predictions):
+        # Fallback: index alignment when patient_id not available
+        min_len = min(len(mod1_predictions or []), len(mod2_predictions or []))
+        if min_len > 0:
+            matched_pairs = list(zip((mod1_predictions or [])[:min_len], (mod2_predictions or [])[:min_len]))
     if not matched_pairs:
         return {
             'mod2_higher_confidence_rate': 0.0,
@@ -3315,6 +3304,7 @@ def analyze_overconfidence(
     low_conf_correct = []
     all_incorrect_confidences = []
     all_correct_confidences = []
+    num_valid = 0
     
     for pred in predictions:
         prediction = pred.get('prediction')
@@ -3323,6 +3313,7 @@ def analyze_overconfidence(
         
         if prediction is None or label is None:
             continue
+        num_valid += 1
         
         is_correct = (int(prediction) == int(label))
         is_high_conf = confidence >= confidence_threshold
@@ -3340,7 +3331,7 @@ def analyze_overconfidence(
             else:
                 low_conf_incorrect.append(confidence)
     
-    total = len(predictions)
+    total = num_valid  # Use count of predictions with valid prediction+label for rates
     high_conf_incorrect_count = len(high_conf_incorrect)
     high_conf_correct_count = len(high_conf_correct)
     low_conf_incorrect_count = len(low_conf_incorrect)
@@ -3359,7 +3350,7 @@ def analyze_overconfidence(
     
     return {
         'modality': modality_name,
-        'total_samples': total,
+        'total_samples': total,  # Number of valid predictions (with non-None prediction and label)
         'high_conf_incorrect_count': high_conf_incorrect_count,
         'high_conf_incorrect_rate': high_conf_incorrect_rate,
         'avg_confidence_when_incorrect': avg_conf_when_incorrect,
@@ -3542,14 +3533,16 @@ def calculate_patient_level_results(
                 'accuracy': acc,
                 'num_samples': num_predictions,
                 'certainty_metrics': certainty_metrics,
-                'overconfidence_metrics': overconfidence_metrics
+                'overconfidence_metrics': overconfidence_metrics,
+                'full_predictions': data['full_predictions'],  # For patient-level disagreement
             }
         else:
             patient_step_results[step_name] = {
                 'accuracy': 0.0,
                 'num_samples': 0,
                 'certainty_metrics': analyze_certainty_metrics([], step_name),
-                'overconfidence_metrics': analyze_overconfidence([], step_name)
+                'overconfidence_metrics': analyze_overconfidence([], step_name),
+                'full_predictions': [],
             }
     
     return patient_step_results

@@ -49,36 +49,39 @@ def load_dicom_image(dicom_path: str, window_center: Optional[float] = None,
     except Exception as e:
         raise ValueError(f"Failed to read DICOM file {dicom_path}: {e}")
     
-    # Get pixel array
+    # Get pixel array (keep original dtype for VOI LUT)
     try:
-        pixel_array = ds.pixel_array
+        pixel_array = np.asarray(ds.pixel_array)
     except Exception as e:
         raise ValueError(f"Failed to extract pixel array from {dicom_path}: {e}")
     
-    # Apply VOI LUT (Window/Level) if available
+    # Multi-frame: use first frame (shape N, H, W); avoid treating 3-channel as frames
+    if pixel_array.ndim == 3 and pixel_array.shape[0] != 3:
+        pixel_array = np.asarray(pixel_array[0])
+    
+    # Apply VOI LUT (Window/Level) if available - applies one of VOI LUT Sequence or Window Center/Width
+    voi_applied = False
     try:
         pixel_array = apply_voi_lut(pixel_array, ds)
+        voi_applied = True
     except Exception:
-        # If VOI LUT fails, use raw pixel array
         pass
     
-    # Apply windowing if specified or available in DICOM tags
-    if window_center is not None and window_width is not None:
-        # Custom windowing
-        window_min = window_center - window_width / 2
-        window_max = window_center + window_width / 2
-        pixel_array = np.clip(pixel_array, window_min, window_max)
-    elif hasattr(ds, 'WindowCenter') and hasattr(ds, 'WindowWidth'):
-        # Use DICOM windowing tags
-        try:
-            wc = float(ds.WindowCenter) if not isinstance(ds.WindowCenter, (list, tuple)) else float(ds.WindowCenter[0])
-            ww = float(ds.WindowWidth) if not isinstance(ds.WindowWidth, (list, tuple)) else float(ds.WindowWidth[0])
-            window_min = wc - ww / 2
-            window_max = wc + ww / 2
+    # Apply windowing only when VOI LUT was not applied (avoid double windowing)
+    if not voi_applied:
+        if window_center is not None and window_width is not None:
+            window_min = window_center - window_width / 2
+            window_max = window_center + window_width / 2
             pixel_array = np.clip(pixel_array, window_min, window_max)
-        except (ValueError, TypeError):
-            # If windowing fails, use full range
-            pass
+        elif hasattr(ds, 'WindowCenter') and hasattr(ds, 'WindowWidth'):
+            try:
+                wc = float(ds.WindowCenter) if not isinstance(ds.WindowCenter, (list, tuple)) else float(ds.WindowCenter[0])
+                ww = float(ds.WindowWidth) if not isinstance(ds.WindowWidth, (list, tuple)) else float(ds.WindowWidth[0])
+                window_min = wc - ww / 2
+                window_max = wc + ww / 2
+                pixel_array = np.clip(pixel_array, window_min, window_max)
+            except (ValueError, TypeError):
+                pass
     
     # Normalize to 0-255 range
     pixel_min = pixel_array.min()
@@ -88,6 +91,10 @@ def load_dicom_image(dicom_path: str, window_center: Optional[float] = None,
         pixel_array = ((pixel_array - pixel_min) / (pixel_max - pixel_min) * 255).astype(np.uint8)
     else:
         pixel_array = np.zeros_like(pixel_array, dtype=np.uint8)
+    
+    # MONOCHROME1: higher pixel value = darker; invert so display is correct
+    if getattr(ds, 'PhotometricInterpretation', None) == 'MONOCHROME1':
+        pixel_array = 255 - pixel_array
     
     # Convert to PIL Image
     if len(pixel_array.shape) == 2:
