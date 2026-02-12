@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run LLaVA-Med on full data2/TCGA-KIRP dataset with MR and CT modalities
+# Run LLaVA-Med on full data2/TCGA-KIRP dataset with CT, MR, and PT modalities
 # Usage: ./run_llava_med_data2.sh [local|newton]
 #   local: Run locally (for testing)
 #   newton: Submit to SLURM on Newton cluster (default)
@@ -14,7 +14,8 @@ DATA_ROOT="data2"
 DATASET_CONFIG="data2/tcga_kirp_config.yaml"
 CLASS1="early_stage"
 CLASS2="advanced_stage"
-MODALITIES=("MR" "CT")
+# Use all three available modalities for sequential evaluation
+MODALITIES=("CT" "MR" "PT")
 
 MOD1="${MODALITIES[0]}"
 MOD2="${MODALITIES[1]}"
@@ -59,6 +60,7 @@ if [ "$MODE" == "local" ]; then
         --dataset_config "${DATASET_CONFIG}" \
         --class_names "${CLASS1}" "${CLASS2}" \
         --temperature 0.8 \
+        --llava_med_flip_predictions \
         --aggressive_preprocess \
         --no_progress
     
@@ -129,7 +131,7 @@ echo "=========================================="
 echo "Running LLaVA-Med on data2/TCGA-KIRP"
 echo "Running BOTH orders: ${MOD_SUFFIX_FORWARD} and ${MOD_SUFFIX_REVERSE}"
 echo "=========================================="
-python3 -u -m src.main --data_root "${DATA_ROOT}" --modalities ${MODALITIES[*]} --run_both_orders --model_arch ${MODEL_ARCH} --model_name ${MODEL_NAME} --output_dir results --batch_size 8 --dataset_config "${DATASET_CONFIG}" --class_names "${CLASS1}" "${CLASS2}" --temperature 0.8 --aggressive_preprocess
+python3 -u -m src.main --data_root "${DATA_ROOT}" --modalities ${MODALITIES[*]} --run_both_orders --model_arch ${MODEL_ARCH} --model_name ${MODEL_NAME} --output_dir results --batch_size 8 --dataset_config "${DATASET_CONFIG}" --class_names "${CLASS1}" "${CLASS2}" --temperature 0.8 --llava_med_flip_predictions --aggressive_preprocess
 
 EXIT_CODE=\$?
 

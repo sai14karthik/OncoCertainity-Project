@@ -619,6 +619,9 @@ def evaluate_sequential_modalities(
                             mod1_preds, mod2_preds, combined_preds, patient_ids
                         )
                         bias['note'] = f"Analysis for {len(individual_mod_preds)} modalities using first two as representatives. Full pairwise analysis available in pairwise_agreements."
+                        # Store actual modality names used in analysis for correct display
+                        bias['actual_mod1_name'] = mod_list[0]
+                        bias['actual_mod2_name'] = mod_list[1]
                         combined_bias_analyses[combined_step_name] = bias
     
     # ============================================================================
@@ -1522,8 +1525,16 @@ def print_evaluation_results(evaluation_results: Dict):
         for combined_name, bias_analysis in sorted(combined_bias_analyses.items()):
             component_mods = combined_name.split('+')
             if len(component_mods) >= 2:
-                mod1_name = component_mods[0]
-                mod2_name = component_mods[-1]  # Last modality in combination
+                # Use actual modality names from analysis if available (for 3+ modality cases)
+                actual_mod1 = bias_analysis.get('actual_mod1_name')
+                actual_mod2 = bias_analysis.get('actual_mod2_name')
+                if actual_mod1 and actual_mod2:
+                    mod1_name = actual_mod1
+                    mod2_name = actual_mod2
+                else:
+                    # For 2-modality case, use component names
+                    mod1_name = component_mods[0]
+                    mod2_name = component_mods[-1]  # Last modality in combination
                 print(f"\n{combined_name}:")
                 matches_mod2_rate = bias_analysis.get('combined_matches_mod2_rate', 0.0)
                 matches_mod1_rate = bias_analysis.get('combined_matches_mod1_rate', 0.0)

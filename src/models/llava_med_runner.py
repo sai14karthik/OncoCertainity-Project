@@ -39,9 +39,13 @@ class LLaVAMedRunner:
         device: Optional[str] = None,
         class_names: Optional[List[str]] = None,
         hf_token: Optional[str] = None,
+        flip_predictions: bool = False,
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.class_names = class_names or ["Class0", "Class1"]
+        # Optional polarity flip: if True, final binary prediction is inverted (0 ↔ 1).
+        # This is useful when a model is systematically predicting the opposite label.
+        self.flip_predictions = flip_predictions
         self.compute_dtype = torch.float16 if self.device.startswith("cuda") else torch.float32
         if len(self.class_names) != 2:
             raise ValueError("LLaVAMedRunner currently supports exactly two classes.")
@@ -484,6 +488,9 @@ class LLaVAMedRunner:
         
         # Final safety check: ensure prediction is valid
         prediction = max(0, min(1, int(prediction)))
+        # Optional polarity flip (used only when explicitly requested)
+        if self.flip_predictions:
+            prediction = 1 - prediction
 
         return {
             "prediction": prediction,

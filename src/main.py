@@ -343,6 +343,12 @@ def main():
         help='Hugging Face token for accessing private models. Can also be set via HF_TOKEN or HUGGING_FACE_HUB_TOKEN environment variable'
     )
     parser.add_argument(
+        '--llava_med_flip_predictions',
+        action='store_true',
+        help='For LLaVA-Med only: flip the final binary prediction (0 ↔ 1). '
+             'Useful when the model is systematically predicting the opposite label.'
+    )
+    parser.add_argument(
         '--class_names',
         type=str,
         nargs='+',
@@ -436,7 +442,8 @@ def main():
             model_name=args.model_name,
             device=device,
             class_names=args.class_names,
-            hf_token=hf_token
+            hf_token=hf_token,
+            flip_predictions=getattr(args, 'llava_med_flip_predictions', False),
         )
     else:
         model = MultimodalModelWrapper(
