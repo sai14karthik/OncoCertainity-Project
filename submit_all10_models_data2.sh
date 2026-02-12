@@ -1,5 +1,5 @@
 #!/bin/bash
-# Submit all 10 models (top 5 + next 5) for data2/TCGA-KIRP evaluation with CT MR
+# Submit all 10 models (top 5 + next 5) for data2/TCGA-KIRP evaluation with ALL modalities (CT MR PT)
 # Usage: ./submit_all10_models_data2.sh
 
 echo "=========================================="
@@ -8,7 +8,7 @@ echo "=========================================="
 echo "Dataset: data2/TCGA-KIRP"
 echo "Config: data2/tcga_kirp_config.yaml"
 echo "Classes: early_stage, advanced_stage"
-echo "Modalities: CT MR"
+echo "Modalities: CT MR PT (all modalities)"
 echo ""
 
 # Fixed parameters for data2/TCGA-KIRP
@@ -16,7 +16,7 @@ DATA_ROOT="data2"
 DATASET_CONFIG="data2/tcga_kirp_config.yaml"
 CLASS1="early_stage"
 CLASS2="advanced_stage"
-MODALITIES=("CT" "MR")
+MODALITIES=("CT" "MR" "PT")
 
 echo "Step 1: Submitting top 5 models..."
 echo ""
