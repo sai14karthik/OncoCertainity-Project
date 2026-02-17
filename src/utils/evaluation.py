@@ -251,24 +251,31 @@ def evaluate_sequential_modalities(
     """
     Evaluate model behavior for each modality (and optional mix).
     Focuses on certainty dynamics and how modality changes affect prediction certainty.
-    
+
     This analysis is designed to understand model behavior, not optimize accuracy.
     In zero-shot settings, accuracy near chance is expected; what matters is:
     - How confidence changes across modalities (Mod1, Mod2, Mod1+Mod2, etc.)
     - Whether combining modalities increases or decreases certainty
     - Whether modality disagreement leads to lower confidence or unstable logits
-    
+
     Args:
         results: Dictionary with keys as case_ids and values as lists of predictions
                  Each prediction dict should have 'modalities_used', 'prediction', 'label',
                  'confidence', 'probabilities', and optionally 'logits'
         modalities: Ordered list of modalities supplied via CLI (supports N modalities)
-    
+
     Returns:
         Dictionary with certainty metrics for each step (accuracy included for reference only).
-    Note:
-        Pairwise keys (e.g. pairwise_agreements) use canonical key tuple(sorted([mod_i, mod_j]))
-        so (CT, MR) and (MR, CT) refer to the same pair.
+
+    LLaVA-Med / N-modality invariants (keep when changing this or analyze_* functions):
+    - Pairwise keys: canonical tuple(sorted([mod_i, mod_j])) so (CT,MR) and (MR,CT) are one pair.
+    - Pairwise confidence & dominance: stored metrics are normalized so Mod1 = first of key, Mod2 = second,
+      so "Mod1 Higher %" / "Mod2 Higher %" and "X has higher confidence" are consistent across run orders.
+    - All analyze_* functions that match two or three prediction lists must group by each list's own
+      patient_id (then intersect), then aggregate per patient. Never zip by index when slice counts
+      differ (e.g. CT 738 vs MR 235 vs PT 789).
+    - First-vs-combined agreement: when slice counts differ or combined has multiple mods, aggregate
+      both to patient-level before comparing.
     """
     if not results:
         return {'step_results': {}, 'patient_level_results': {}, 'modalities': modalities or []}
@@ -443,11 +450,29 @@ def evaluate_sequential_modalities(
                     # Logit similarity
                     similarity = analyze_logit_similarity(mod_i_preds, mod_j_preds, patient_ids)
                     pairwise_logit_similarities[pair_key] = similarity
-                    # Confidence comparison
+                    # Confidence comparison (normalize so pair_key order = Mod1, Mod2 for consistent tables)
                     comparison = analyze_modality_confidence_comparison(mod_i_preds, mod_j_preds, patient_ids)
+                    mod_a, mod_b = pair_key
+                    if (mod_i, mod_j) != (mod_a, mod_b):
+                        # Was computed as (mod_j, mod_i); swap so stored = (mod_a, mod_b)
+                        comparison = {
+                            **comparison,
+                            'mod1_higher_confidence_rate': comparison.get('mod2_higher_confidence_rate', 0.0),
+                            'mod2_higher_confidence_rate': comparison.get('mod1_higher_confidence_rate', 0.0),
+                            'avg_confidence_difference': -comparison.get('avg_confidence_difference', 0.0),
+                        }
                     pairwise_confidence_comparisons[pair_key] = comparison
-                    # Dominance analysis
+                    # Dominance analysis (normalize for canonical key order)
                     dominance = analyze_modality_dominance(mod_i_preds, mod_j_preds, patient_ids)
+                    if (mod_i, mod_j) != (mod_a, mod_b):
+                        dominance = {
+                            **dominance,
+                            'mod2_higher_confidence_rate': dominance.get('mod1_higher_confidence_rate', 0.0),
+                            'mod1_higher_confidence_rate': dominance.get('mod2_higher_confidence_rate', 0.0),
+                            'avg_confidence_difference': -dominance.get('avg_confidence_difference', 0.0),
+                            'mod2_wins_when_disagree': dominance.get('mod1_wins_when_disagree', 0),
+                            'mod1_wins_when_disagree': dominance.get('mod2_wins_when_disagree', 0),
+                        }
                     pairwise_dominance[pair_key] = dominance
     
     # ============================================================================
@@ -503,7 +528,66 @@ def evaluate_sequential_modalities(
             patient_ids = extract_patient_ids_from_predictions(first_mod_preds)
             
             # Agreement between first mod and combined
-            agreement = analyze_modality_agreement(first_mod_preds, combined_preds, patient_ids)
+            # CRITICAL FIX: When comparing first modality with a combined step that includes multiple modalities,
+            # we're comparing different modalities (e.g., PT vs CT in PT+MR+CT step, which processes CT images).
+            # Different modalities have different slice counts and non-aligned slice indices, so we must aggregate
+            # to patient level for meaningful comparison.
+            # Also handle cases where slice counts differ significantly even for same modality.
+            len_first = len(first_mod_preds)
+            len_combined = len(combined_preds)
+            slice_count_ratio = max(len_first, len_combined) / min(len_first, len_combined) if min(len_first, len_combined) > 0 else float('inf')
+            
+            # Always aggregate to patient level if:
+            # 1. Combined step includes multiple modalities (different modality than first), OR
+            # 2. Slice counts differ significantly (>1.5 ratio)
+            should_aggregate = len(combined_mods) > 1 or slice_count_ratio > 1.5
+            
+            if should_aggregate:
+                # Aggregate both to patient-level for fair comparison
+                first_mod_by_patient = {}
+                combined_by_patient = {}
+                
+                for pred in first_mod_preds:
+                    pid = pred.get('patient_id')
+                    if pid is not None:
+                        if pid not in first_mod_by_patient:
+                            first_mod_by_patient[pid] = []
+                        first_mod_by_patient[pid].append(pred)
+                
+                for pred in combined_preds:
+                    pid = pred.get('patient_id')
+                    if pid is not None:
+                        if pid not in combined_by_patient:
+                            combined_by_patient[pid] = []
+                        combined_by_patient[pid].append(pred)
+                
+                # Aggregate to patient-level
+                first_mod_patient_preds = []
+                combined_patient_preds = []
+                common_patients = set(first_mod_by_patient.keys()) & set(combined_by_patient.keys())
+                
+                for pid in sorted(common_patients):
+                    first_aggregated = aggregate_patient_predictions(first_mod_by_patient[pid])
+                    combined_aggregated = aggregate_patient_predictions(combined_by_patient[pid])
+                    
+                    first_mod_patient_preds.append({
+                        'prediction': first_aggregated['prediction'],
+                        'confidence': first_aggregated['confidence'],
+                        'patient_id': pid
+                    })
+                    combined_patient_preds.append({
+                        'prediction': combined_aggregated['prediction'],
+                        'confidence': combined_aggregated['confidence'],
+                        'patient_id': pid
+                    })
+                
+                # Compare patient-level predictions
+                patient_ids_for_agreement = [p.get('patient_id') for p in first_mod_patient_preds]
+                agreement = analyze_modality_agreement(first_mod_patient_preds, combined_patient_preds, patient_ids_for_agreement)
+            else:
+                # Slice counts are similar - use slice-level comparison
+                agreement = analyze_modality_agreement(first_mod_preds, combined_preds, patient_ids)
+            
             combined_agreements[combined_step_name] = agreement
             
             # Uncertainty effect - GENERIC for all combinations (not just first pair)
@@ -1087,6 +1171,7 @@ def print_evaluation_results(evaluation_results: Dict):
             print("PATIENT-LEVEL OVERCONFIDENCE ANALYSIS")
             print("-"*80)
             print("High-confidence incorrect predictions (confidence ≥ 0.7) - Critical reliability issue")
+            print("NOTE: Counts are at PATIENT-LEVEL (one prediction per patient, aggregated from slices)")
             print()
             print(f"{'Modality':<15} {'High-Conf Incorrect':<20} {'Rate':<12} {'Avg Conf (Wrong)':<18} {'Overconf Severity':<20}")
             print("-"*80)
@@ -1103,6 +1188,15 @@ def print_evaluation_results(evaluation_results: Dict):
                 avg_conf_wrong = overconf.get('avg_confidence_when_incorrect', 0.0)
                 overconf_severity = overconf.get('overconfidence_severity', 0.0)
                 
+                # Validation: high_conf_incorrect should not exceed num_patients
+                if high_conf_incorrect > num_patients:
+                    import sys
+                    print(f"ERROR: Patient-level overconfidence count ({high_conf_incorrect}) exceeds number of patients ({num_patients}) for {step_name}. "
+                          f"This indicates a bug - patient-level should count patients, not slices.", file=sys.stderr, flush=True)
+                    # Clamp to num_patients for display (but this indicates a bug that needs fixing)
+                    high_conf_incorrect = min(high_conf_incorrect, num_patients)
+                    high_conf_incorrect_rate = high_conf_incorrect / num_patients if num_patients > 0 else 0.0
+                
                 print(f"{step_name:<15} {high_conf_incorrect:<20} {high_conf_incorrect_rate:<12.4f} {avg_conf_wrong:<18.4f} {overconf_severity:<20.4f}")
             
             print("\n" + "-"*80)
@@ -1110,7 +1204,9 @@ def print_evaluation_results(evaluation_results: Dict):
             print("-"*80)
             print("• High-Conf Incorrect: Number of patients where model was confident (≥0.7) but wrong")
             print("• Rate: Proportion of all patients with high-confidence errors")
-            print("• Avg Conf (Wrong): Average confidence when prediction is incorrect")
+            print("• Avg Conf (Wrong): Average confidence of ALL incorrect predictions (including low-confidence ones)")
+            print("  → If 0.0: No incorrect predictions at all")
+            print("  → If >0.0 but High-Conf Incorrect=0: Incorrect predictions exist but all are low-confidence (<0.7)")
             print("• Overconf Severity: Average confidence of high-confidence incorrect predictions")
             print("  → Higher values indicate more severe overconfidence (model very wrong but very confident)")
             print("  → Aggregated confidence is the mean of winning-class slice confidences (typically <1.0).")
@@ -1599,6 +1695,8 @@ def print_evaluation_results(evaluation_results: Dict):
     print("-"*80)
     print("• High-confidence errors are particularly dangerous - model appears certain but is wrong")
     print("• High Overconf Severity indicates model is very wrong but very confident (worst case)")
+    print("• Avg Conf (Wrong) = 0.0 means no incorrect predictions; >0.0 means incorrect predictions exist")
+    print("  → If >0.0 but High-Conf Incorrect=0: All incorrect predictions are low-confidence (<0.7)")
     print("• Large gap between Avg Conf (Wrong) and Avg Conf (Correct) suggests poor calibration")
     print("• Models should have LOW confidence when incorrect - high confidence on errors is unreliable")
     
@@ -1983,91 +2081,55 @@ def analyze_modality_agreement(
     Returns:
         Dictionary with agreement metrics and certainty analysis
     """
-    if len(mod1_predictions) != len(mod2_predictions):
-        # Try to match by patient_id if provided
-        if patient_ids is None:
-            return {
-                'agreement_rate': 0.0,
-                'disagreement_rate': 0.0,
-                'mod1_dominates': 0,
-                'mod2_dominates': 0,
-                'num_pairs': 0,
-                'disagreement_confidence_analysis': {},
-                'disagreement_logit_analysis': {}
-            }
-    
     # Match predictions by patient_id + slice_index (if available) or by index
+    # CRITICAL: Group each modality by its own patient_id so matching is correct when slice counts differ (e.g. CT 738 vs MR 235)
     matched_pairs = []
-    if patient_ids is not None:
-        # Try to match by patient_id + slice_index for more accurate slice-level matching
-        # Group predictions by patient_id
-        mod1_by_patient = {}
-        mod2_by_patient = {}
-        
-        for pid, pred in zip(patient_ids, mod1_predictions):
-            if pid not in mod1_by_patient:
-                mod1_by_patient[pid] = []
-            mod1_by_patient[pid].append(pred)
-        
-        # For modality 2 predictions, use the same patient_ids list (they should be in same order)
-        # But if lengths differ, we need to extract patient_ids from mod2_predictions
-        mod2_patient_ids = [p.get('patient_id') if isinstance(p, dict) else None for p in mod2_predictions]
-        if len(mod2_patient_ids) == len(mod2_predictions) and all(pid is not None for pid in mod2_patient_ids):
-            # Use patient_ids from mod2_predictions
-            for pid, pred in zip(mod2_patient_ids, mod2_predictions):
+    mod1_by_patient = {}
+    mod2_by_patient = {}
+    for pred in mod1_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
+            if pid is not None:
+                if pid not in mod1_by_patient:
+                    mod1_by_patient[pid] = []
+                mod1_by_patient[pid].append(pred)
+    for pred in mod2_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
+            if pid is not None:
                 if pid not in mod2_by_patient:
                     mod2_by_patient[pid] = []
                 mod2_by_patient[pid].append(pred)
-        else:
-            # Fallback: use provided patient_ids (assume same order)
-            for pid, pred in zip(patient_ids[:len(mod2_predictions)], mod2_predictions):
-                if pid not in mod2_by_patient:
-                    mod2_by_patient[pid] = []
-                mod2_by_patient[pid].append(pred)
-        
-        # Match slices within each patient by slice_index if available, otherwise by order
-        for pid in set(patient_ids):
-            if pid in mod1_by_patient and pid in mod2_by_patient:
-                mod1_slices = mod1_by_patient[pid]
-                mod2_slices = mod2_by_patient[pid]
-                
-                # Try to match by slice_index
-                mod1_by_slice_idx = {}
-                mod2_by_slice_idx = {}
-                
-                for mod1_slice in mod1_slices:
-                    slice_idx = mod1_slice.get('slice_index') if isinstance(mod1_slice, dict) else None
-                    if slice_idx is not None:
-                        mod1_by_slice_idx[slice_idx] = mod1_slice
-                
-                for mod2_slice in mod2_slices:
-                    slice_idx = mod2_slice.get('slice_index') if isinstance(mod2_slice, dict) else None
-                    if slice_idx is not None:
-                        mod2_by_slice_idx[slice_idx] = mod2_slice
-                
-                # Match by slice_index if both have it (most accurate)
-                if mod1_by_slice_idx and mod2_by_slice_idx:
-                    common_slice_indices = set(mod1_by_slice_idx.keys()) & set(mod2_by_slice_idx.keys())
-                    if common_slice_indices:
-                        # Match by slice_index (preferred method)
-                        for slice_idx in common_slice_indices:
-                            matched_pairs.append((mod1_by_slice_idx[slice_idx], mod2_by_slice_idx[slice_idx]))
-                    else:
-                        # No common slice_index values - fall back to patient-level matching
-                        # Match one slice per patient (use first available slice from each)
-                        if mod1_slices and mod2_slices:
-                            # Use first slice from each modality for this patient
-                            matched_pairs.append((mod1_slices[0], mod2_slices[0]))
-                else:
-                    # One or both don't have slice_index - fall back to patient-level matching
-                    # Match one slice per patient (use first available slice from each)
-                    if mod1_slices and mod2_slices:
-                        # Use first slice from each modality for this patient
-                        matched_pairs.append((mod1_slices[0], mod2_slices[0]))
-    else:
-        # Match by index
-        min_len = min(len(mod1_predictions), len(mod2_predictions))
-        matched_pairs = list(zip(mod1_predictions[:min_len], mod2_predictions[:min_len]))
+    common_patient_ids = sorted(set(mod1_by_patient.keys()) & set(mod2_by_patient.keys()))
+    if common_patient_ids:
+        # Match slices within each patient by slice_index if available, otherwise one pair per patient
+        for pid in common_patient_ids:
+            mod1_slices = mod1_by_patient[pid]
+            mod2_slices = mod2_by_patient[pid]
+            mod1_by_slice_idx = {}
+            mod2_by_slice_idx = {}
+            for mod1_slice in mod1_slices:
+                slice_idx = mod1_slice.get('slice_index') if isinstance(mod1_slice, dict) else None
+                if slice_idx is not None:
+                    mod1_by_slice_idx[slice_idx] = mod1_slice
+            for mod2_slice in mod2_slices:
+                slice_idx = mod2_slice.get('slice_index') if isinstance(mod2_slice, dict) else None
+                if slice_idx is not None:
+                    mod2_by_slice_idx[slice_idx] = mod2_slice
+            if mod1_by_slice_idx and mod2_by_slice_idx:
+                common_slice_indices = set(mod1_by_slice_idx.keys()) & set(mod2_by_slice_idx.keys())
+                if common_slice_indices:
+                    for slice_idx in common_slice_indices:
+                        matched_pairs.append((mod1_by_slice_idx[slice_idx], mod2_by_slice_idx[slice_idx]))
+                elif mod1_slices and mod2_slices:
+                    matched_pairs.append((mod1_slices[0], mod2_slices[0]))
+            elif mod1_slices and mod2_slices:
+                matched_pairs.append((mod1_slices[0], mod2_slices[0]))
+    if not matched_pairs and (mod1_predictions or mod2_predictions):
+        # Fallback: match by index when no patient_id grouping possible
+        min_len = min(len(mod1_predictions or []), len(mod2_predictions or []))
+        if min_len > 0:
+            matched_pairs = list(zip((mod1_predictions or [])[:min_len], (mod2_predictions or [])[:min_len]))
     
     if not matched_pairs:
         return {
@@ -2230,24 +2292,25 @@ def analyze_logit_similarity(
     Returns:
         Dictionary with logit similarity metrics
     """
-    # Group predictions by patient_id and aggregate logits
-    if patient_ids is not None:
-        # Group by patient_id
-        mod1_by_patient = {}
-        mod2_by_patient = {}
-        
-        for pid, pred in zip(patient_ids, mod1_predictions):
+    # Group predictions by each modality's own patient_id (correct when slice counts differ, e.g. CT 738 vs MR 235)
+    mod1_by_patient = {}
+    mod2_by_patient = {}
+    for pred in mod1_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in mod1_by_patient:
                     mod1_by_patient[pid] = []
                 mod1_by_patient[pid].append(pred)
-        
-        for pid, pred in zip(patient_ids, mod2_predictions):
+    for pred in mod2_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in mod2_by_patient:
                     mod2_by_patient[pid] = []
                 mod2_by_patient[pid].append(pred)
-        
+    common_patient_ids = sorted(set(mod1_by_patient.keys()) & set(mod2_by_patient.keys()))
+    if common_patient_ids:
         # Aggregate logits per patient (weighted by confidence)
         aggregated_mod1 = {}
         aggregated_mod2 = {}
@@ -2515,42 +2578,16 @@ def analyze_modality_confidence_comparison(
     confidence_differences = []
     
     for mod1_pred, mod2_pred in matched_pairs:
-        # Use appropriate confidence based on whether Mod2 has Mod1 context
-        # For consistency, use probabilities_array for both if available (shows actual model output)
-        mod1_probs = mod1_pred.get('probabilities_array')
-        if mod1_probs is not None and len(mod1_probs) >= 2:
-            mod1_conf = float(np.max(np.array(mod1_probs)))
-        else:
-            mod1_conf = mod1_pred.get('confidence', 0.0)
-        
-        used_context = mod2_pred.get('used_context', False)
-        
-        if used_context:
-            # Mod2 with Mod1 context: Use probabilities_array (after boosting) to show improved performance
-            mod2_probs_after = mod2_pred.get('probabilities_array')
-            if mod2_probs_after is not None and len(mod2_probs_after) >= 2:
-                mod2_conf = float(np.max(np.array(mod2_probs_after)))
-            else:
-                mod2_conf = mod2_pred.get('confidence', 0.0)
-        else:
-            # Mod2 alone: Use probabilities_before_boosting (shows true model behavior)
-            mod2_probs_before = mod2_pred.get('probabilities_before_boosting')
-            if mod2_probs_before is not None and len(mod2_probs_before) >= 2:
-                mod2_conf = float(np.max(np.array(mod2_probs_before)))
-            else:
-                # Fallback: try probabilities_array if available
-                mod2_probs = mod2_pred.get('probabilities_array')
-                if mod2_probs is not None and len(mod2_probs) >= 2:
-                    mod2_conf = float(np.max(np.array(mod2_probs)))
-                else:
-                    mod2_conf = mod2_pred.get('confidence', 0.0)
-        
+        # Use aggregated (patient-level) confidence so PAIRWISE CONFIDENCE and PAIRWISE DOMINANCE match
+        mod1_conf = mod1_pred.get('confidence', 0.0)
+        mod2_conf = mod2_pred.get('confidence', 0.0)
         conf_diff = mod2_conf - mod1_conf
         confidence_differences.append(conf_diff)
         
-        if mod2_conf > mod1_conf + 0.01:  # Mod2 higher (with small threshold)
+        # Use strict comparison (same as PAIRWISE DOMINANCE) so both sections report consistent "X% higher"
+        if mod2_conf > mod1_conf:
             mod2_higher += 1
-        elif mod1_conf > mod2_conf + 0.01:  # Mod1 higher
+        elif mod1_conf > mod2_conf:
             mod1_higher += 1
         else:
             equal_conf += 1
@@ -2602,74 +2639,69 @@ def analyze_multimodality_uncertainty_effect(
         Dictionary with uncertainty analysis
     """
     # Match all three prediction sets - aggregate at patient level first
+    # CRITICAL: Group each by its own patient_id so matching is correct when slice counts differ
     matched_triplets = []
-    if patient_ids is not None:
-        # Group by patient_id (preserve all slices)
-        mod1_by_patient = {}
-        mod2_by_patient = {}
-        combined_by_patient = {}
-        
-        for pid, pred in zip(patient_ids, mod1_predictions):
+    mod1_by_patient = {}
+    mod2_by_patient = {}
+    combined_by_patient = {}
+    for pred in mod1_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in mod1_by_patient:
                     mod1_by_patient[pid] = []
                 mod1_by_patient[pid].append(pred)
-        
-        for pid, pred in zip(patient_ids, mod2_predictions):
+    for pred in mod2_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in mod2_by_patient:
                     mod2_by_patient[pid] = []
                 mod2_by_patient[pid].append(pred)
-        
-        for pid, pred in zip(patient_ids, combined_predictions):
+    for pred in combined_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in combined_by_patient:
                     combined_by_patient[pid] = []
                 combined_by_patient[pid].append(pred)
-        
-        # Aggregate predictions per patient
-        for pid in set(patient_ids):
-            if pid in mod1_by_patient and pid in mod2_by_patient and pid in combined_by_patient:
-                mod1_slices = mod1_by_patient[pid]
-                mod2_slices = mod2_by_patient[pid]
-                combined_slices = combined_by_patient[pid]
-                
-                # Aggregate each modality
-                mod1_aggregated = aggregate_patient_predictions(mod1_slices)
-                mod2_aggregated = aggregate_patient_predictions(mod2_slices)
-                combined_aggregated = aggregate_patient_predictions(combined_slices)
-                
-                # Create aggregated prediction dicts
-                mod1_pred = {
-                    'prediction': mod1_aggregated['prediction'],
-                    'confidence': mod1_aggregated['confidence'],
-                    'probabilities': mod1_slices[0].get('probabilities', {}) if mod1_slices else {},
-                    'probabilities_array': mod1_slices[0].get('probabilities_array', []) if mod1_slices else []
-                }
-                
-                mod2_pred = {
-                    'prediction': mod2_aggregated['prediction'],
-                    'confidence': mod2_aggregated['confidence'],
-                    'probabilities': mod2_slices[0].get('probabilities', {}) if mod2_slices else {},
-                    'probabilities_array': mod2_slices[0].get('probabilities_array', []) if mod2_slices else [],
-                    'probabilities_before_boosting': mod2_slices[0].get('probabilities_before_boosting') if mod2_slices else None
-                }
-                
-                combined_pred = {
-                    'prediction': combined_aggregated['prediction'],
-                    'confidence': combined_aggregated['confidence'],
-                    'probabilities': combined_slices[0].get('probabilities', {}) if combined_slices else {},
-                    'probabilities_array': combined_slices[0].get('probabilities_array', []) if combined_slices else []
-                }
-                
-                matched_triplets.append((mod1_pred, mod2_pred, combined_pred))
-    else:
-        min_len = min(len(mod1_predictions), len(mod2_predictions), len(combined_predictions))
-        matched_triplets = list(zip(
-            mod1_predictions[:min_len],
-            mod2_predictions[:min_len],
-            combined_predictions[:min_len]
-        ))
+    common_patient_ids = sorted(set(mod1_by_patient.keys()) & set(mod2_by_patient.keys()) & set(combined_by_patient.keys()))
+    if common_patient_ids:
+        for pid in common_patient_ids:
+            mod1_slices = mod1_by_patient[pid]
+            mod2_slices = mod2_by_patient[pid]
+            combined_slices = combined_by_patient[pid]
+            mod1_aggregated = aggregate_patient_predictions(mod1_slices)
+            mod2_aggregated = aggregate_patient_predictions(mod2_slices)
+            combined_aggregated = aggregate_patient_predictions(combined_slices)
+            mod1_pred = {
+                'prediction': mod1_aggregated['prediction'],
+                'confidence': mod1_aggregated['confidence'],
+                'probabilities': mod1_slices[0].get('probabilities', {}) if mod1_slices else {},
+                'probabilities_array': mod1_slices[0].get('probabilities_array', []) if mod1_slices else []
+            }
+            mod2_pred = {
+                'prediction': mod2_aggregated['prediction'],
+                'confidence': mod2_aggregated['confidence'],
+                'probabilities': mod2_slices[0].get('probabilities', {}) if mod2_slices else {},
+                'probabilities_array': mod2_slices[0].get('probabilities_array', []) if mod2_slices else [],
+                'probabilities_before_boosting': mod2_slices[0].get('probabilities_before_boosting') if mod2_slices else None
+            }
+            combined_pred = {
+                'prediction': combined_aggregated['prediction'],
+                'confidence': combined_aggregated['confidence'],
+                'probabilities': combined_slices[0].get('probabilities', {}) if combined_slices else {},
+                'probabilities_array': combined_slices[0].get('probabilities_array', []) if combined_slices else []
+            }
+            matched_triplets.append((mod1_pred, mod2_pred, combined_pred))
+    if not matched_triplets and (mod1_predictions or mod2_predictions or combined_predictions):
+        min_len = min(len(mod1_predictions or []), len(mod2_predictions or []), len(combined_predictions or []))
+        if min_len > 0:
+            matched_triplets = list(zip(
+                (mod1_predictions or [])[:min_len],
+                (mod2_predictions or [])[:min_len],
+                (combined_predictions or [])[:min_len]
+            ))
     
     if not matched_triplets:
         return {
@@ -2773,75 +2805,69 @@ def analyze_zero_shot_multimodal_value(
     Returns:
         Dictionary with multimodal value analysis
     """
-    # Match all three prediction sets - aggregate at patient level first
+    # Match all three prediction sets - aggregate at patient level first (group each by own patient_id)
     matched_triplets = []
-    if patient_ids is not None:
-        # Group by patient_id (preserve all slices)
-        mod1_by_patient = {}
-        mod2_by_patient = {}
-        combined_by_patient = {}
-        
-        for pid, pred in zip(patient_ids, mod1_predictions):
+    mod1_by_patient = {}
+    mod2_by_patient = {}
+    combined_by_patient = {}
+    for pred in mod1_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in mod1_by_patient:
                     mod1_by_patient[pid] = []
                 mod1_by_patient[pid].append(pred)
-        
-        for pid, pred in zip(patient_ids, mod2_predictions):
+    for pred in mod2_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in mod2_by_patient:
                     mod2_by_patient[pid] = []
                 mod2_by_patient[pid].append(pred)
-        
-        for pid, pred in zip(patient_ids, combined_predictions):
+    for pred in combined_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in combined_by_patient:
                     combined_by_patient[pid] = []
                 combined_by_patient[pid].append(pred)
-        
-        # Aggregate predictions per patient
-        for pid in set(patient_ids):
-            if pid in mod1_by_patient and pid in mod2_by_patient and pid in combined_by_patient:
-                mod1_slices = mod1_by_patient[pid]
-                mod2_slices = mod2_by_patient[pid]
-                combined_slices = combined_by_patient[pid]
-                
-                # Aggregate each modality
-                mod1_aggregated = aggregate_patient_predictions(mod1_slices)
-                mod2_aggregated = aggregate_patient_predictions(mod2_slices)
-                combined_aggregated = aggregate_patient_predictions(combined_slices)
-                
-                # Create aggregated prediction dicts
-                mod1_pred = {
-                    'prediction': mod1_aggregated['prediction'],
-                    'confidence': mod1_aggregated['confidence'],
-                    'probabilities': mod1_slices[0].get('probabilities', {}) if mod1_slices else {},
-                    'probabilities_array': mod1_slices[0].get('probabilities_array', []) if mod1_slices else []
-                }
-                
-                mod2_pred = {
-                    'prediction': mod2_aggregated['prediction'],
-                    'confidence': mod2_aggregated['confidence'],
-                    'probabilities': mod2_slices[0].get('probabilities', {}) if mod2_slices else {},
-                    'probabilities_array': mod2_slices[0].get('probabilities_array', []) if mod2_slices else [],
-                    'probabilities_before_boosting': mod2_slices[0].get('probabilities_before_boosting') if mod2_slices else None
-                }
-                
-                combined_pred = {
-                    'prediction': combined_aggregated['prediction'],
-                    'confidence': combined_aggregated['confidence'],
-                    'probabilities': combined_slices[0].get('probabilities', {}) if combined_slices else {},
-                    'probabilities_array': combined_slices[0].get('probabilities_array', []) if combined_slices else []
-                }
-                
-                matched_triplets.append((mod1_pred, mod2_pred, combined_pred))
-    else:
-        min_len = min(len(mod1_predictions), len(mod2_predictions), len(combined_predictions))
-        matched_triplets = list(zip(
-            mod1_predictions[:min_len],
-            mod2_predictions[:min_len],
-            combined_predictions[:min_len]
-        ))
+    common_patient_ids = sorted(set(mod1_by_patient.keys()) & set(mod2_by_patient.keys()) & set(combined_by_patient.keys()))
+    if common_patient_ids:
+        for pid in common_patient_ids:
+            mod1_slices = mod1_by_patient[pid]
+            mod2_slices = mod2_by_patient[pid]
+            combined_slices = combined_by_patient[pid]
+            mod1_aggregated = aggregate_patient_predictions(mod1_slices)
+            mod2_aggregated = aggregate_patient_predictions(mod2_slices)
+            combined_aggregated = aggregate_patient_predictions(combined_slices)
+            mod1_pred = {
+                'prediction': mod1_aggregated['prediction'],
+                'confidence': mod1_aggregated['confidence'],
+                'probabilities': mod1_slices[0].get('probabilities', {}) if mod1_slices else {},
+                'probabilities_array': mod1_slices[0].get('probabilities_array', []) if mod1_slices else []
+            }
+            mod2_pred = {
+                'prediction': mod2_aggregated['prediction'],
+                'confidence': mod2_aggregated['confidence'],
+                'probabilities': mod2_slices[0].get('probabilities', {}) if mod2_slices else {},
+                'probabilities_array': mod2_slices[0].get('probabilities_array', []) if mod2_slices else [],
+                'probabilities_before_boosting': mod2_slices[0].get('probabilities_before_boosting') if mod2_slices else None
+            }
+            combined_pred = {
+                'prediction': combined_aggregated['prediction'],
+                'confidence': combined_aggregated['confidence'],
+                'probabilities': combined_slices[0].get('probabilities', {}) if combined_slices else {},
+                'probabilities_array': combined_slices[0].get('probabilities_array', []) if combined_slices else []
+            }
+            matched_triplets.append((mod1_pred, mod2_pred, combined_pred))
+    if not matched_triplets and (mod1_predictions or mod2_predictions or combined_predictions):
+        min_len = min(len(mod1_predictions or []), len(mod2_predictions or []), len(combined_predictions or []))
+        if min_len > 0:
+            matched_triplets = list(zip(
+                (mod1_predictions or [])[:min_len],
+                (mod2_predictions or [])[:min_len],
+                (combined_predictions or [])[:min_len]
+            ))
     
     if not matched_triplets:
         return {
@@ -2969,58 +2995,51 @@ def analyze_modality_dominance(
     Returns:
         Dictionary with modality dominance analysis
     """
-    # Match predictions - aggregate at patient level first
+    # Match predictions - aggregate at patient level first (same logic as analyze_modality_confidence_comparison)
+    # CRITICAL: Group each modality by its own patient_id so matching is correct when slice counts differ (e.g. CT 738 vs MR 235)
     matched_pairs = []
-    if patient_ids is not None:
-        # Group by patient_id (preserve all slices)
-        mod1_by_patient = {}
-        mod2_by_patient = {}
-        
-        for pid, pred in zip(patient_ids, mod1_predictions):
+    mod1_by_patient = {}
+    mod2_by_patient = {}
+    for pred in mod1_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in mod1_by_patient:
                     mod1_by_patient[pid] = []
                 mod1_by_patient[pid].append(pred)
-        
-        for pid, pred in zip(patient_ids, mod2_predictions):
+    for pred in mod2_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in mod2_by_patient:
                     mod2_by_patient[pid] = []
                 mod2_by_patient[pid].append(pred)
-        
+    common_patient_ids = sorted(set(mod1_by_patient.keys()) & set(mod2_by_patient.keys()))
+    if common_patient_ids:
         # Aggregate predictions per patient (weighted by confidence)
-        for pid in set(patient_ids):
-            if pid in mod1_by_patient and pid in mod2_by_patient:
-                mod1_slices = mod1_by_patient[pid]
-                mod2_slices = mod2_by_patient[pid]
-                
-                # Aggregate Mod1: weighted average confidence
-                mod1_aggregated = aggregate_patient_predictions(mod1_slices)
-                
-                # Aggregate Mod2: weighted average confidence
-                mod2_aggregated = aggregate_patient_predictions(mod2_slices)
-                
-                # Create aggregated prediction dicts with full info
-                mod1_pred = {
-                    'prediction': mod1_aggregated['prediction'],
-                    'confidence': mod1_aggregated['confidence'],
-                    'probabilities': mod1_slices[0].get('probabilities', {}) if mod1_slices else {},
-                    'probabilities_array': mod1_slices[0].get('probabilities_array', []) if mod1_slices else [],
-                    'logits': mod1_slices[0].get('logits', []) if mod1_slices else []
-                }
-                
-                mod2_pred = {
-                    'prediction': mod2_aggregated['prediction'],
-                    'confidence': mod2_aggregated['confidence'],
-                    'probabilities': mod2_slices[0].get('probabilities', {}) if mod2_slices else {},
-                    'probabilities_array': mod2_slices[0].get('probabilities_array', []) if mod2_slices else [],
-                    'probabilities_before_boosting': mod2_slices[0].get('probabilities_before_boosting') if mod2_slices else None,
-                    'used_context': mod2_slices[0].get('used_context', False) if mod2_slices else False,
-                    'logits': mod2_slices[0].get('logits', []) if mod2_slices else []
-                }
-                
-                matched_pairs.append((mod1_pred, mod2_pred))
-    else:
+        for pid in common_patient_ids:
+            mod1_slices = mod1_by_patient[pid]
+            mod2_slices = mod2_by_patient[pid]
+            mod1_aggregated = aggregate_patient_predictions(mod1_slices)
+            mod2_aggregated = aggregate_patient_predictions(mod2_slices)
+            mod1_pred = {
+                'prediction': mod1_aggregated['prediction'],
+                'confidence': mod1_aggregated['confidence'],
+                'probabilities': mod1_slices[0].get('probabilities', {}) if mod1_slices else {},
+                'probabilities_array': mod1_slices[0].get('probabilities_array', []) if mod1_slices else [],
+                'logits': mod1_slices[0].get('logits', []) if mod1_slices else []
+            }
+            mod2_pred = {
+                'prediction': mod2_aggregated['prediction'],
+                'confidence': mod2_aggregated['confidence'],
+                'probabilities': mod2_slices[0].get('probabilities', {}) if mod2_slices else {},
+                'probabilities_array': mod2_slices[0].get('probabilities_array', []) if mod2_slices else [],
+                'probabilities_before_boosting': mod2_slices[0].get('probabilities_before_boosting') if mod2_slices else None,
+                'used_context': mod2_slices[0].get('used_context', False) if mod2_slices else False,
+                'logits': mod2_slices[0].get('logits', []) if mod2_slices else []
+            }
+            matched_pairs.append((mod1_pred, mod2_pred))
+    if not matched_pairs:
         min_len = min(len(mod1_predictions), len(mod2_predictions))
         matched_pairs = list(zip(mod1_predictions[:min_len], mod2_predictions[:min_len]))
     
@@ -3042,20 +3061,10 @@ def analyze_modality_dominance(
     mod1_wins_disagree = 0
     
     for mod1_pred, mod2_pred in matched_pairs:
-        # Use probabilities_array for consistency with confidence comparison function
-        # For individual modalities (no context), probabilities_array should match confidence field
-        mod1_probs = mod1_pred.get('probabilities_array')
-        if mod1_probs is not None and len(mod1_probs) >= 2:
-            mod1_conf = float(np.max(np.array(mod1_probs)))
-        else:
-            mod1_conf = mod1_pred.get('confidence', 0.0)
-        
-        mod2_probs = mod2_pred.get('probabilities_array')
-        if mod2_probs is not None and len(mod2_probs) >= 2:
-            mod2_conf = float(np.max(np.array(mod2_probs)))
-        else:
-            mod2_conf = mod2_pred.get('confidence', 0.0)
-        
+        # Use aggregated confidence (patient-level) so PAIRWISE DOMINANCE matches PAIRWISE CONFIDENCE COMPARISONS
+        # and the patient-level results table (same interpretation of "which modality has higher confidence").
+        mod1_conf = mod1_pred.get('confidence', 0.0)
+        mod2_conf = mod2_pred.get('confidence', 0.0)
         mod1_pred_class = mod1_pred.get('prediction')
         mod2_pred_class = mod2_pred.get('prediction')
         
@@ -3122,75 +3131,69 @@ def analyze_multimodal_bias(
     Returns:
         Dictionary with multimodal bias analysis
     """
-    # Match all three prediction sets - aggregate at patient level first
+    # Match all three prediction sets - aggregate at patient level first (group each by own patient_id)
     matched_triplets = []
-    if patient_ids is not None:
-        # Group by patient_id (preserve all slices)
-        mod1_by_patient = {}
-        mod2_by_patient = {}
-        combined_by_patient = {}
-        
-        for pid, pred in zip(patient_ids, mod1_predictions):
+    mod1_by_patient = {}
+    mod2_by_patient = {}
+    combined_by_patient = {}
+    for pred in mod1_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in mod1_by_patient:
                     mod1_by_patient[pid] = []
                 mod1_by_patient[pid].append(pred)
-        
-        for pid, pred in zip(patient_ids, mod2_predictions):
+    for pred in mod2_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in mod2_by_patient:
                     mod2_by_patient[pid] = []
                 mod2_by_patient[pid].append(pred)
-        
-        for pid, pred in zip(patient_ids, combined_predictions):
+    for pred in combined_predictions or []:
+        if isinstance(pred, dict):
+            pid = pred.get('patient_id')
             if pid is not None:
                 if pid not in combined_by_patient:
                     combined_by_patient[pid] = []
                 combined_by_patient[pid].append(pred)
-        
-        # Aggregate predictions per patient
-        for pid in set(patient_ids):
-            if pid in mod1_by_patient and pid in mod2_by_patient and pid in combined_by_patient:
-                mod1_slices = mod1_by_patient[pid]
-                mod2_slices = mod2_by_patient[pid]
-                combined_slices = combined_by_patient[pid]
-                
-                # Aggregate each modality
-                mod1_aggregated = aggregate_patient_predictions(mod1_slices)
-                mod2_aggregated = aggregate_patient_predictions(mod2_slices)
-                combined_aggregated = aggregate_patient_predictions(combined_slices)
-                
-                # Create aggregated prediction dicts
-                mod1_pred = {
-                    'prediction': mod1_aggregated['prediction'],
-                    'confidence': mod1_aggregated['confidence'],
-                    'probabilities': mod1_slices[0].get('probabilities', {}) if mod1_slices else {},
-                    'probabilities_array': mod1_slices[0].get('probabilities_array', []) if mod1_slices else []
-                }
-                
-                mod2_pred = {
-                    'prediction': mod2_aggregated['prediction'],
-                    'confidence': mod2_aggregated['confidence'],
-                    'probabilities': mod2_slices[0].get('probabilities', {}) if mod2_slices else {},
-                    'probabilities_array': mod2_slices[0].get('probabilities_array', []) if mod2_slices else [],
-                    'probabilities_before_boosting': mod2_slices[0].get('probabilities_before_boosting') if mod2_slices else None
-                }
-                
-                combined_pred = {
-                    'prediction': combined_aggregated['prediction'],
-                    'confidence': combined_aggregated['confidence'],
-                    'probabilities': combined_slices[0].get('probabilities', {}) if combined_slices else {},
-                    'probabilities_array': combined_slices[0].get('probabilities_array', []) if combined_slices else []
-                }
-                
-                matched_triplets.append((mod1_pred, mod2_pred, combined_pred))
-    else:
-        min_len = min(len(mod1_predictions), len(mod2_predictions), len(combined_predictions))
-        matched_triplets = list(zip(
-            mod1_predictions[:min_len],
-            mod2_predictions[:min_len],
-            combined_predictions[:min_len]
-        ))
+    common_patient_ids = sorted(set(mod1_by_patient.keys()) & set(mod2_by_patient.keys()) & set(combined_by_patient.keys()))
+    if common_patient_ids:
+        for pid in common_patient_ids:
+            mod1_slices = mod1_by_patient[pid]
+            mod2_slices = mod2_by_patient[pid]
+            combined_slices = combined_by_patient[pid]
+            mod1_aggregated = aggregate_patient_predictions(mod1_slices)
+            mod2_aggregated = aggregate_patient_predictions(mod2_slices)
+            combined_aggregated = aggregate_patient_predictions(combined_slices)
+            mod1_pred = {
+                'prediction': mod1_aggregated['prediction'],
+                'confidence': mod1_aggregated['confidence'],
+                'probabilities': mod1_slices[0].get('probabilities', {}) if mod1_slices else {},
+                'probabilities_array': mod1_slices[0].get('probabilities_array', []) if mod1_slices else []
+            }
+            mod2_pred = {
+                'prediction': mod2_aggregated['prediction'],
+                'confidence': mod2_aggregated['confidence'],
+                'probabilities': mod2_slices[0].get('probabilities', {}) if mod2_slices else {},
+                'probabilities_array': mod2_slices[0].get('probabilities_array', []) if mod2_slices else [],
+                'probabilities_before_boosting': mod2_slices[0].get('probabilities_before_boosting') if mod2_slices else None
+            }
+            combined_pred = {
+                'prediction': combined_aggregated['prediction'],
+                'confidence': combined_aggregated['confidence'],
+                'probabilities': combined_slices[0].get('probabilities', {}) if combined_slices else {},
+                'probabilities_array': combined_slices[0].get('probabilities_array', []) if combined_slices else []
+            }
+            matched_triplets.append((mod1_pred, mod2_pred, combined_pred))
+    if not matched_triplets and (mod1_predictions or mod2_predictions or combined_predictions):
+        min_len = min(len(mod1_predictions or []), len(mod2_predictions or []), len(combined_predictions or []))
+        if min_len > 0:
+            matched_triplets = list(zip(
+                (mod1_predictions or [])[:min_len],
+                (mod2_predictions or [])[:min_len],
+                (combined_predictions or [])[:min_len]
+            ))
     
     if not matched_triplets:
         return {
@@ -3534,10 +3537,29 @@ def calculate_patient_level_results(
             acc = calculate_accuracy(predictions, labels)
             num_predictions = len(predictions)
             
+            # CRITICAL: Ensure full_predictions contains patient-level predictions (one per patient)
+            # Verify uniqueness by patient_id to catch any bugs
+            patient_ids_in_predictions = [p.get('patient_id') for p in data['full_predictions'] if p.get('patient_id') is not None]
+            unique_patient_ids = set(patient_ids_in_predictions)
+            if len(patient_ids_in_predictions) != len(unique_patient_ids):
+                import sys
+                print(f"WARNING: Duplicate patient IDs found in patient-level predictions for {step_name}. "
+                      f"Expected {len(unique_patient_ids)} unique patients, but found {len(patient_ids_in_predictions)} entries. "
+                      f"This may indicate a bug in patient-level aggregation.", file=sys.stderr, flush=True)
+            
+            # Verify we have patient-level predictions (should have 'num_slices' field indicating aggregation)
+            for pred in data['full_predictions']:
+                if 'num_slices' not in pred:
+                    import sys
+                    print(f"WARNING: Patient-level prediction missing 'num_slices' field for {step_name}. "
+                          f"This may indicate slice-level data was incorrectly included.", file=sys.stderr, flush=True)
+                    break
+            
             # Analyze certainty metrics at patient level
             certainty_metrics = analyze_certainty_metrics(data['full_predictions'], step_name)
             
             # Analyze overconfidence at patient level
+            # NOTE: data['full_predictions'] should contain ONE entry per patient (aggregated from slices)
             overconfidence_metrics = analyze_overconfidence(data['full_predictions'], step_name)
             
             patient_step_results[step_name] = {

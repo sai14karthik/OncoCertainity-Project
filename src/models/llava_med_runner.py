@@ -23,6 +23,67 @@ os.environ.setdefault("BITSANDBYTES_NOWELCOME", "1")
 os.environ.setdefault("ACCELERATE_USE_TENSORBOARD", "false")
 os.environ.setdefault("USE_TF", "0")
 
+# When tokenizer LoadFromFile is called with path=None (e.g. on Newton), the patch will try
+# loading from these (set by LLaVAMedRunner before load_pretrained_model).
+_llava_med_resolved_model_path: Optional[str] = None  # local dir only
+_llava_med_model_name: Optional[str] = None  # hub id or path for hf_hub_download fallback
+_llava_med_hf_token: Optional[str] = None
+
+
+def _patch_sentencepiece_for_llava_med():
+    """Workaround: SentencePiece LoadFromFile's C extension can raise TypeError: not a string on some envs (e.g. Newton).
+    When we have a path, we read the file and load via LoadFromSerializedProto so the C layer never sees a path.
+    When path is None we try: resolved dir + tokenizer.model, then hf_hub_download of tokenizer.model."""
+    try:
+        import sentencepiece as _sp
+        if getattr(_sp.SentencePieceProcessor, "_llava_med_str_patched", False):
+            return
+        _load_from_file_orig = _sp.SentencePieceProcessor.LoadFromFile
+        _load_from_serialized = _sp.SentencePieceProcessor.LoadFromSerializedProto
+
+        def _load_from_file_via_bytes(self, path):
+            if path is None:
+                for name in ("tokenizer.model", "sentencepiece.model", "spm.model"):
+                    if _llava_med_resolved_model_path and os.path.isdir(_llava_med_resolved_model_path):
+                        fallback = os.path.join(_llava_med_resolved_model_path, name)
+                        if os.path.isfile(fallback):
+                            with open(fallback, "rb") as f:
+                                return _load_from_serialized(self, f.read())
+                if _llava_med_model_name and not os.path.isdir(_llava_med_model_name):
+                    try:
+                        from huggingface_hub import hf_hub_download
+                        for force in (False, True):
+                            local = hf_hub_download(
+                                _llava_med_model_name,
+                                "tokenizer.model",
+                                token=_llava_med_hf_token,
+                                force_download=force,
+                            )
+                            if local and os.path.isfile(local):
+                                with open(local, "rb") as f:
+                                    return _load_from_serialized(self, f.read())
+                    except Exception:
+                        pass
+                return _load_from_file_orig(self, path)
+            if isinstance(path, (list, tuple)):
+                path = path[0] if path else None
+            if path is None:
+                return _load_from_file_orig(self, path)
+            if isinstance(path, bytes):
+                path = path.decode("utf-8", errors="replace")
+            path_str = os.path.abspath(os.fspath(path))
+            with open(path_str, "rb") as f:
+                serialized = f.read()
+            return _load_from_serialized(self, serialized)
+
+        _sp.SentencePieceProcessor.LoadFromFile = _load_from_file_via_bytes
+        _sp.SentencePieceProcessor._llava_med_str_patched = True
+    except Exception:
+        pass
+
+
+_patch_sentencepiece_for_llava_med()
+
 from llava.model.builder import load_pretrained_model
 from llava.conversation import conv_templates
 from llava.mm_utils import tokenizer_image_token
@@ -60,7 +121,22 @@ class LLaVAMedRunner:
         if self.hf_token:
             os.environ['HF_TOKEN'] = self.hf_token
             os.environ['HUGGING_FACE_HUB_TOKEN'] = self.hf_token
-        
+
+        # Resolve model path so tokenizer can find vocab when vocab_file is None (e.g. on Newton)
+        global _llava_med_resolved_model_path, _llava_med_model_name, _llava_med_hf_token
+        _llava_med_model_name = model_name
+        _llava_med_hf_token = self.hf_token
+        if os.path.isdir(model_name):
+            _llava_med_resolved_model_path = os.path.abspath(model_name)
+        else:
+            try:
+                from huggingface_hub import snapshot_download
+                _llava_med_resolved_model_path = snapshot_download(model_name, token=self.hf_token)
+                if not os.path.isdir(_llava_med_resolved_model_path):
+                    _llava_med_resolved_model_path = None
+            except Exception:
+                _llava_med_resolved_model_path = None
+
         self.tokenizer, self.model, self.image_processor, context_len = load_pretrained_model(
             model_path=model_name,
             model_base=None,
@@ -488,8 +564,9 @@ class LLaVAMedRunner:
         
         # Final safety check: ensure prediction is valid
         prediction = max(0, min(1, int(prediction)))
-        # Optional polarity flip (used only when explicitly requested)
-        if self.flip_predictions:
+        # Optional polarity flip: apply only when no context (solo steps). With context, LLaVA-Med
+        # can output correct or inverted depending on modality/order; no reliable heuristic.
+        if self.flip_predictions and not previous_predictions:
             prediction = 1 - prediction
 
         return {

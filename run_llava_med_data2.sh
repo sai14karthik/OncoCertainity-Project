@@ -117,9 +117,7 @@ echo "Installing LLaVA-Med dependencies..."
 pip install "transformers>=4.30.0,<4.38.0" accelerate>=0.20.0 "tiktoken>=0.5.0,<0.8.0" protobuf>=4.21.0 sentencepiece>=0.1.99
 echo "Dependencies installed successfully!"
 
-# Clear corrupted tokenizer cache
-echo "Clearing corrupted tokenizer cache..."
-rm -rf ~/.cache/huggingface/hub/models--microsoft--llava-med-v1.5-mistral-7b/snapshots/*/tokenizer.model 2>/dev/null || true
+# Do NOT delete tokenizer.model from cache; our runner loads it via bytes and needs the file present
 
 # Verify installation
 python3 -c "import tiktoken; import google.protobuf; import sentencepiece; print('✓ Dependencies verified')" || {
