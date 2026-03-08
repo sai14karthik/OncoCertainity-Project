@@ -164,7 +164,7 @@ from PIL import Image
 import torch
 import numpy as np
 from tqdm import tqdm
-from src.utils.dicom_utils import load_image_smart, is_dicom_file
+from src.utils.dicom_utils import load_image_smart, is_dicom_file, is_image_usable
 
 # Configure tqdm for better display in log files (Slurm jobs)
 # Use file=sys.stderr for better compatibility with Slurm log files
@@ -288,6 +288,12 @@ def main():
         help='Maximum number of images per patient per modality (e.g., 100 means 100 CT + 100 PET per patient). If None, loads ALL images from all patients'
     )
     parser.add_argument(
+        '--max_patients',
+        type=int,
+        default=None,
+        help='Maximum number of patients to evaluate (only those with all modalities). If None, use all matched patients. Useful for quick runs (e.g. --max_patients 1)'
+    )
+    parser.add_argument(
         '--batch_size',
         type=int,
         default=1,
@@ -359,6 +365,11 @@ def main():
         '--allow_single_modality',
         action='store_true',
         help='Permit running with a single modality (steps 2 and 3 will be skipped)'
+    )
+    parser.add_argument(
+        '--skip_bad_images',
+        action='store_true',
+        help='Skip images that are pure white, pure black, or very low contrast (unclear). Logs counts at end.'
     )
     parser.add_argument(
         '--reverse_order',
@@ -541,11 +552,15 @@ def main():
         random.seed(42)
         random.shuffle(matched_patients)
 
-        # Select all available patients
+        # Select all available patients (optionally limit with --max_patients)
         # max_samples controls how many images per patient per modality, not how many patients
         selected_patients = matched_patients
+        if args.max_patients is not None and args.max_patients > 0:
+            selected_patients = matched_patients[:args.max_patients]
         mod_list = ", ".join(modalities)
         print(f"\nFound {len(matched_patients)} patients with all modalities ({mod_list})", flush=True)
+        if args.max_patients is not None and args.max_patients > 0:
+            print(f"  Using {len(selected_patients)} patient(s) (--max_patients {args.max_patients})", flush=True)
         if args.max_samples is not None:
             print(f"  Will take up to {args.max_samples} images per modality from each patient", flush=True)
             print(f"  Expected total: ~{len(matched_patients) * args.max_samples} images per modality", flush=True)
@@ -601,6 +616,8 @@ def main():
         # Format: {patient_id: {modality: {'prediction': int, 'class_name': str, 'confidence': float}}}
         # Each patient gets aggregated predictions for each modality from all their slices
         patient_predictions = {}
+        # Count skipped bad images (pure white/black, low contrast) when --skip_bad_images
+        bad_image_counts = {}
 
         # Store predictions by image for better matching and aggregation
         # Format: {modality: {patient_id: [{'image_id': str, 'prediction': int, 'class_name': str, 'confidence': float}, ...]}}
@@ -627,6 +644,11 @@ def main():
                 try:
                     # Smart loader: handles both regular images and DICOM files
                     img = load_image_smart(img_info['image_path'])
+                    usable, reason = is_image_usable(img)
+                    if not usable:
+                        bad_image_counts[reason] = bad_image_counts.get(reason, 0) + 1
+                        if getattr(args, 'skip_bad_images', False):
+                            continue
                     
                     prediction = model.predict(
                         images={current_mod: img},
@@ -824,7 +846,12 @@ def main():
                 try:
                     # Smart loader: handles both regular images and DICOM files
                     img = load_image_smart(img_info['image_path'])
-    
+                    usable, reason = is_image_usable(img)
+                    if not usable:
+                        bad_image_counts[reason] = bad_image_counts.get(reason, 0) + 1
+                        if getattr(args, 'skip_bad_images', False):
+                            continue
+
                     # Build previous_predictions dict from all context modalities
                     # BEST STRATEGY: 1-to-1 matching with intelligent fallbacks
                     previous_predictions = {}
@@ -1194,6 +1221,13 @@ def main():
         print_evaluation_results(evaluation_results)
         
         print(f"\nResults saved to {output_file}", flush=True)
+        if bad_image_counts:
+            total = sum(bad_image_counts.values())
+            parts = [f"{k}: {v}" for k, v in sorted(bad_image_counts.items())]
+            if getattr(args, 'skip_bad_images', False):
+                print(f"Skipped {total} bad image(s) ({', '.join(parts)})", flush=True)
+            else:
+                print(f"Detected {total} bad image(s) ({', '.join(parts)}). Use --skip_bad_images to exclude from evaluation.", flush=True)
 
 if __name__ == '__main__':
     main()

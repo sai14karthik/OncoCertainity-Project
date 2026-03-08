@@ -183,13 +183,26 @@ class LLaVAMedRunner:
         else:
             modality_description = f"{current_modality} scan"
         
+        # Detect if this is lung NSCLC vs SCLC (Lung-PET-CT-Dx)
+        is_lung_nsclc_sclc = (
+            "non_small_cell" in (first + second).lower() and "small_cell" in (first + second).lower()
+        )
         # Detect if this is cancer grading (generic for any cancer type)
         is_grading = any(
             keyword in first.lower() + second.lower()
             for keyword in ["high_grade", "low_grade", "grade"]
         )
-        
-        if is_grading:
+
+        if is_lung_nsclc_sclc:
+            return (
+                f"{context_prefix}You are a medical imaging expert specializing in lung cancer. "
+                f"Given this {modality_description} slice, classify the lung cancer type. "
+                f"Group 1 (non_small_cell): NSCLC – adenocarcinoma, squamous cell, or large cell carcinoma. "
+                f"These are Non-Small Cell Lung Cancers; they share similar surgical options and are often treated with targeted therapies or immunotherapy. "
+                f"Group 2 (small_cell): Small Cell Lung Cancer – a distinct neuroendocrine tumor, more aggressive, treated primarily with chemotherapy/radiation rather than surgery. "
+                f"Respond with exactly one word: {first} or {second}."
+            )
+        elif is_grading:
             return (
                 f"{context_prefix}You are a medical imaging expert specializing in cancer diagnosis. "
                 f"Given this {modality_description} slice, determine whether the cancer grade is "

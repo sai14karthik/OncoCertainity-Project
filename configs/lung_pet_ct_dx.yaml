@@ -1,0 +1,20 @@
+# Binary: A,G,E -> non_small_cell (0), B -> small_cell (1)
+# Final layout: CT/non_small_cell, CT/small_cell, PT/non_small_cell, PT/small_cell
+dataset_name: Lung-PET-CT-Dx
+
+modalities:
+  CT:
+    folder: CT
+    classes:
+      non_small_cell: 0
+      small_cell: 1
+  PT:
+    folder: PT
+    classes:
+      non_small_cell: 0
+      small_cell: 1
+
+metadata:
+  file: pipeline_metadata.csv
+  image_column: image_path
+  split_column: split

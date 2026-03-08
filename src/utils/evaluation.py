@@ -1173,7 +1173,12 @@ def print_evaluation_results(evaluation_results: Dict):
             print("High-confidence incorrect predictions (confidence ≥ 0.7) - Critical reliability issue")
             print("NOTE: Counts are at PATIENT-LEVEL (one prediction per patient, aggregated from slices)")
             print()
-            print(f"{'Modality':<15} {'High-Conf Incorrect':<20} {'Rate':<12} {'Avg Conf (Wrong)':<18} {'Overconf Severity':<20}")
+            print(
+                f"{'Modality':<15} "
+                f"{'High-Conf Incorrect':<20} {'Incorrect Rate':<14} "
+                f"{'High-Conf Correct':<18} {'Correct Rate':<13} "
+                f"{'Avg Conf (Wrong)':<18} {'Avg Conf (Correct)':<20}"
+            )
             print("-"*80)
             
             for step_name in sorted_steps:
@@ -1185,8 +1190,10 @@ def print_evaluation_results(evaluation_results: Dict):
                 overconf = step_data.get('overconfidence_metrics', {})
                 high_conf_incorrect = overconf.get('high_conf_incorrect_count', 0)
                 high_conf_incorrect_rate = overconf.get('high_conf_incorrect_rate', 0.0)
+                high_conf_correct = overconf.get('high_conf_correct_count', 0)
+                high_conf_correct_rate = overconf.get('high_conf_correct_rate', 0.0)
                 avg_conf_wrong = overconf.get('avg_confidence_when_incorrect', 0.0)
-                overconf_severity = overconf.get('overconfidence_severity', 0.0)
+                avg_conf_correct = overconf.get('avg_confidence_when_correct', 0.0)
                 
                 # Validation: high_conf_incorrect should not exceed num_patients
                 if high_conf_incorrect > num_patients:
@@ -1197,7 +1204,12 @@ def print_evaluation_results(evaluation_results: Dict):
                     high_conf_incorrect = min(high_conf_incorrect, num_patients)
                     high_conf_incorrect_rate = high_conf_incorrect / num_patients if num_patients > 0 else 0.0
                 
-                print(f"{step_name:<15} {high_conf_incorrect:<20} {high_conf_incorrect_rate:<12.4f} {avg_conf_wrong:<18.4f} {overconf_severity:<20.4f}")
+                print(
+                    f"{step_name:<15} "
+                    f"{high_conf_incorrect:<20} {high_conf_incorrect_rate:<14.4f} "
+                    f"{high_conf_correct:<18} {high_conf_correct_rate:<13.4f} "
+                    f"{avg_conf_wrong:<18.4f} {avg_conf_correct:<20.4f}"
+                )
             
             print("\n" + "-"*80)
             print("INTERPRETATION:")
@@ -1671,7 +1683,12 @@ def print_evaluation_results(evaluation_results: Dict):
     print("This analysis reveals when the model fails to recognize its own uncertainty.")
     print()
     
-    print(f"{'Modality':<15} {'High-Conf Incorrect':<20} {'Rate':<12} {'Avg Conf (Wrong)':<18} {'Avg Conf (Correct)':<20} {'Overconf Severity':<20}")
+    print(
+        f"{'Modality':<15} "
+        f"{'High-Conf Incorrect':<20} {'Incorrect Rate':<14} "
+        f"{'High-Conf Correct':<18} {'Correct Rate':<13} "
+        f"{'Avg Conf (Wrong)':<18} {'Avg Conf (Correct)':<20}"
+    )
     print("-"*80)
     
     sorted_steps = sorted(step_results.keys(), key=get_step_order)
@@ -1684,11 +1701,18 @@ def print_evaluation_results(evaluation_results: Dict):
         overconf = step_data.get('overconfidence_metrics', {})
         high_conf_incorrect = overconf.get('high_conf_incorrect_count', 0)
         high_conf_incorrect_rate = overconf.get('high_conf_incorrect_rate', 0.0)
+        high_conf_correct = overconf.get('high_conf_correct_count', 0)
+        high_conf_correct_rate = overconf.get('high_conf_correct_rate', 0.0)
         avg_conf_wrong = overconf.get('avg_confidence_when_incorrect', 0.0)
         avg_conf_correct = overconf.get('avg_confidence_when_correct', 0.0)
         overconf_severity = overconf.get('overconfidence_severity', 0.0)
         
-        print(f"{step_name:<15} {high_conf_incorrect:<20} {high_conf_incorrect_rate:<12.4f} {avg_conf_wrong:<18.4f} {avg_conf_correct:<20.4f} {overconf_severity:<20.4f}")
+        print(
+            f"{step_name:<15} "
+            f"{high_conf_incorrect:<20} {high_conf_incorrect_rate:<14.4f} "
+            f"{high_conf_correct:<18} {high_conf_correct_rate:<13.4f} "
+            f"{avg_conf_wrong:<18.4f} {avg_conf_correct:<20.4f}"
+        )
     
     print("\n" + "-"*80)
     print("KEY INSIGHTS:")

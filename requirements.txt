@@ -14,3 +14,4 @@ tiktoken>=0.5.0,<0.8.0
 protobuf>=4.21.0
 sentencepiece>=0.1.99
 open-clip-torch>=2.20.0
+opencv-python>=4.8.0

@@ -567,6 +567,11 @@ class MultimodalModelWrapper:
                 first_prompts = [context_prefix + prompt for prompt in first_prompts]
                 second_prompts = [context_prefix + prompt for prompt in second_prompts]
         else:
+            # Detect if this is lung NSCLC vs SCLC (non_small_cell vs small_cell) - Lung-PET-CT-Dx
+            is_lung_nsclc_sclc = (
+                "non_small_cell" in (first_class + second_class).lower()
+                and "small_cell" in (first_class + second_class).lower()
+            )
             # Detect if this is cancer grading (high_grade vs low_grade) - generic for any cancer type
             is_cancer_grading = any(
                 keyword in first_class.lower() + second_class.lower()
@@ -578,7 +583,67 @@ class MultimodalModelWrapper:
                 and "advanced_stage" in (first_class + second_class).lower()
             )
 
-            if is_stage_based:
+            if is_lung_nsclc_sclc:
+                # Group 1: NSCLC (A, G, E). Group 2: SCLC (B).
+                # Mix short prompts (better for CLIP/SigLIP) with clinical context.
+                is_nsclc_first = "non_small" in first_class.lower()
+                if context_prefix:
+                    if is_nsclc_first:
+                        first_prompts = [
+                            f"{context_prefix}{current_modality} shows non-small cell lung cancer",
+                            f"{context_prefix}{current_modality} shows NSCLC: adenocarcinoma, squamous, or large cell carcinoma",
+                            f"{context_prefix}{current_modality} shows non-small cell lung cancer (adeno, squamous, or large cell); often treated with surgery or targeted therapy",
+                            f"{context_prefix}{current_modality} shows NSCLC",
+                        ]
+                        second_prompts = [
+                            f"{context_prefix}{current_modality} shows small cell lung cancer",
+                            f"{context_prefix}{current_modality} shows small cell lung carcinoma, neuroendocrine tumor",
+                            f"{context_prefix}{current_modality} shows small cell lung cancer; aggressive, typically treated with chemotherapy and radiation",
+                            f"{context_prefix}{current_modality} shows SCLC",
+                        ]
+                    else:
+                        first_prompts = [
+                            f"{context_prefix}{current_modality} shows small cell lung cancer",
+                            f"{context_prefix}{current_modality} shows small cell lung carcinoma, neuroendocrine tumor",
+                            f"{context_prefix}{current_modality} shows small cell lung cancer; aggressive, typically treated with chemotherapy and radiation",
+                            f"{context_prefix}{current_modality} shows SCLC",
+                        ]
+                        second_prompts = [
+                            f"{context_prefix}{current_modality} shows non-small cell lung cancer",
+                            f"{context_prefix}{current_modality} shows NSCLC: adenocarcinoma, squamous, or large cell carcinoma",
+                            f"{context_prefix}{current_modality} shows non-small cell lung cancer (adeno, squamous, or large cell); often treated with surgery or targeted therapy",
+                            f"{context_prefix}{current_modality} shows NSCLC",
+                        ]
+                else:
+                    if is_nsclc_first:
+                        first_prompts = [
+                            f"a {current_modality} scan showing non-small cell lung cancer",
+                            f"a {current_modality} imaging scan with NSCLC: adenocarcinoma, squamous, or large cell carcinoma",
+                            f"a {current_modality} slice of non-small cell lung cancer (adeno, squamous, or large cell)",
+                            f"a {current_modality} scan of NSCLC",
+                        ]
+                        second_prompts = [
+                            f"a {current_modality} scan showing small cell lung cancer",
+                            f"a {current_modality} imaging scan with small cell lung carcinoma, neuroendocrine tumor",
+                            f"a {current_modality} slice of small cell lung cancer",
+                            f"a {current_modality} scan of SCLC",
+                        ]
+                    else:
+                        first_prompts = [
+                            f"a {current_modality} scan showing small cell lung cancer",
+                            f"a {current_modality} imaging scan with small cell lung carcinoma, neuroendocrine tumor",
+                            f"a {current_modality} slice of small cell lung cancer",
+                            f"a {current_modality} scan of SCLC",
+                        ]
+                        second_prompts = [
+                            f"a {current_modality} scan showing non-small cell lung cancer",
+                            f"a {current_modality} imaging scan with NSCLC: adenocarcinoma, squamous, or large cell carcinoma",
+                            f"a {current_modality} slice of non-small cell lung cancer (adeno, squamous, or large cell)",
+                            f"a {current_modality} scan of NSCLC",
+                        ]
+                # Slightly higher weight for short, clear prompts (CLIP/SigLIP work better with concise text)
+                prompt_weights = [1.1, 1.0, 1.0, 1.1]
+            elif is_stage_based:
                 # Stage-specific prompts: early_stage = Stage I–II, advanced_stage = Stage III–IV
                 is_early_first = "early" in first_class.lower()
                 if context_prefix:

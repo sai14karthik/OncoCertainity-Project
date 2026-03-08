@@ -4,7 +4,7 @@ Converts DICOM files to PIL Images for processing.
 """
 
 import os
-from typing import Optional
+from typing import Optional, Tuple
 import numpy as np
 from PIL import Image
 
@@ -127,6 +127,43 @@ def is_dicom_file(file_path: str) -> bool:
     """
     ext = os.path.splitext(file_path)[1].lower()
     return ext in ['.dcm', '.dicom']
+
+
+def is_image_usable(
+    image: Image.Image,
+    min_std: float = 5.0,
+    pure_threshold: float = 252.0,
+    black_threshold: float = 3.0,
+) -> Tuple[bool, str]:
+    """
+    Check if an image is usable (not pure white, pure black, or too flat/unclear).
+    
+    Args:
+        image: PIL Image (RGB or L).
+        min_std: Minimum pixel std to consider image "not flat" (default 5.0 on 0-255 scale).
+        pure_threshold: Mean above this = treated as pure white (default 252).
+        black_threshold: Mean below this = treated as pure black (default 3).
+    
+    Returns:
+        (is_usable, reason). reason is empty if usable.
+    """
+    arr = np.asarray(image)
+    if arr.ndim == 3:
+        arr = np.mean(arr, axis=2)
+    arr = arr.astype(np.float64)
+    mean_val = float(np.mean(arr))
+    std_val = float(np.std(arr))
+    if std_val < 1e-6 and (mean_val >= pure_threshold or mean_val <= black_threshold):
+        if mean_val >= pure_threshold:
+            return False, "pure_white"
+        return False, "pure_black"
+    if std_val < min_std:
+        return False, "low_contrast"
+    if mean_val >= pure_threshold:
+        return False, "pure_white"
+    if mean_val <= black_threshold:
+        return False, "pure_black"
+    return True, ""
 
 
 def load_image_smart(image_path: str) -> Image.Image:

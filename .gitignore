@@ -97,27 +97,19 @@ third_party/*/results/
 third_party/*/outputs/
 third_party/*/*.log
 
-# LLaVA-Med specific
 third_party/llava-med/checkpoints/
 third_party/llava-med/__pycache__/
 
-# Test outputs
 .pytest_cache/
 .coverage
 htmlcov/
 
-# Verification/test scripts (optional - uncomment if you don't want to track these)
-# verify_codebase.py
-# verify_code_structure.py
-# test_*.py
-# quick_test_*.py
 
-# Shell scripts - track important ones, ignore temporary/running ones
-# Temporary job scripts (created by submission scripts during execution)
+
 submit_*_tmp.sh
 *_tmp.sh
 *_temp.sh
-# Running/temporary scripts (created during job execution)
+
 *.sh.tmp
 *.sh.temp
-# Keep important .sh files tracked (submit_*.sh, sync_*.sh, test_*.sh, run_*.sh, etc.)
+*sh
