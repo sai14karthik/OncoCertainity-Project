@@ -42,6 +42,11 @@ checkpoints/
 *.h5
 *.pb
 
+# Large local datasets at repo root (do not commit)
+/Lung-PET-CT-Dx/
+/Lung-PET-CT-Dx-PNG/
+/manifest-*/
+
 # Data directories (large files)
 # data/
 !data/dataset_config.yaml

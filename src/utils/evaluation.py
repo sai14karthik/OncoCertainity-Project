@@ -22,7 +22,7 @@ optimizing classification performance.
 
 import numpy as np
 import sys
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 
 def calculate_accuracy(
@@ -177,6 +177,45 @@ def calculate_calibration_error(uncalibrated_probs: np.ndarray, calibrated_probs
     return float(mae)
 
 
+def extract_confidence_and_probs(pred: Dict) -> Tuple[float, np.ndarray]:
+    """
+    Prefer explicit probabilities; otherwise softmax over logits.
+    Returns (max probability, probability vector).
+    """
+    if pred is None:
+        return 0.5, np.array([0.5, 0.5])
+
+    probs_arr = pred.get("probabilities_array")
+    if probs_arr is not None:
+        p = np.array(probs_arr, dtype=float)
+        s = float(p.sum())
+        if s > 0:
+            p = p / s
+        else:
+            p = np.ones_like(p) / max(len(p), 1)
+        return float(np.max(p)), p
+
+    logits = pred.get("logits")
+    if logits is not None:
+        p = calculate_calibrated_probabilities(np.array(logits), temperature=1.0)
+        return float(np.max(p)), p
+
+    # Fallback: binary uniform
+    return 0.5, np.array([0.5, 0.5])
+
+
+def get_effective_prediction_class(pred: Dict) -> int:
+    """Argmax class index from the same probability view as extract_confidence_and_probs."""
+    _, p = extract_confidence_and_probs(pred)
+    return int(np.argmax(p))
+
+
+def get_effective_confidence(pred: Dict) -> float:
+    """Top-1 probability from extract_confidence_and_probs."""
+    conf, _ = extract_confidence_and_probs(pred)
+    return conf
+
+
 def aggregate_patient_predictions(patient_slices: List[Dict]) -> Dict:
     """
     Aggregate predictions from multiple slices per patient.
@@ -246,7 +285,8 @@ def aggregate_patient_predictions(patient_slices: List[Dict]) -> Dict:
 
 def evaluate_sequential_modalities(
     results: Dict[str, List[Dict]],
-    modalities: List[str]
+    modalities: List[str],
+    calibration_temperature: float = 0.8,
 ) -> Dict:
     """
     Evaluate model behavior for each modality (and optional mix).
@@ -367,7 +407,9 @@ def evaluate_sequential_modalities(
             num_predictions = len(predictions)
             
             # Analyze certainty metrics
-            certainty_metrics = analyze_certainty_metrics(data['full_predictions'], step_name)
+            certainty_metrics = analyze_certainty_metrics(
+                data['full_predictions'], step_name, calibration_temperature=calibration_temperature
+            )
             
             # Analyze overconfidence (high-confidence incorrect predictions)
             overconfidence_metrics = analyze_overconfidence(data['full_predictions'], step_name)
@@ -382,7 +424,7 @@ def evaluate_sequential_modalities(
             step_results[step_name] = {
                 'accuracy': 0.0,
                 'num_samples': 0,
-                'certainty_metrics': analyze_certainty_metrics([], step_name),
+                'certainty_metrics': analyze_certainty_metrics([], step_name, calibration_temperature=calibration_temperature),
                 'overconfidence_metrics': analyze_overconfidence([], step_name)
             }
     
@@ -1013,7 +1055,9 @@ def evaluate_sequential_modalities(
         disagreement_rate_mod1_vs_combined = mod1_vs_combined_agreement.get('disagreement_rate', None)
     
     # Calculate patient-level results (mandatory requirement)
-    patient_level_results = calculate_patient_level_results(results, modalities)
+    patient_level_results = calculate_patient_level_results(
+        results, modalities, calibration_temperature=calibration_temperature
+    )
     
     # Disagreement rate: BY DEFINITION patient-level (proportion of patients where
     # aggregated prediction for modality A != aggregated prediction for modality B).
@@ -1839,7 +1883,8 @@ def print_evaluation_results(evaluation_results: Dict):
 
 def analyze_certainty_metrics(
     predictions: List[Dict],
-    modality_name: str
+    modality_name: str,
+    calibration_temperature: float = 0.8,
 ) -> Dict:
     """
     Analyze certainty metrics for a set of predictions.
@@ -1960,14 +2005,15 @@ def analyze_certainty_metrics(
             logit_array = np.array(logits)
             logit_magnitudes.append(calculate_logit_magnitude(logit_array))
             
-            # Calculate calibrated probabilities (using temperature=0.8 for better calibration)
-            calibrated_probs = calculate_calibrated_probabilities(logit_array, temperature=0.8)
+            # Calibrated softmax(logits / T); T should match inference --temperature when possible
+            cal_temp = float(calibration_temperature) if calibration_temperature and calibration_temperature > 0 else 0.8
+            calibrated_probs = calculate_calibrated_probabilities(logit_array, temperature=cal_temp)
             calibrated_conf = float(np.max(calibrated_probs))
             calibrated_confidences.append(calibrated_conf)
             
             # Calculate calibration error (difference between uncalibrated and calibrated)
             # Uncalibrated = softmax(logits) with temperature=1.0 (no scaling)
-            # Calibrated = softmax(logits / 0.8) with temperature=0.8
+            # Calibrated = softmax(logits / T)
             uncalibrated_probs = calculate_calibrated_probabilities(logit_array, temperature=1.0)
             if len(uncalibrated_probs) == len(calibrated_probs):
                 cal_error = calculate_calibration_error(uncalibrated_probs, calibrated_probs)
@@ -3404,7 +3450,8 @@ def analyze_overconfidence(
 
 def calculate_patient_level_results(
     results: Dict[str, List[Dict]],
-    modalities: List[str]
+    modalities: List[str],
+    calibration_temperature: float = 0.8,
 ) -> Dict:
     """
     Calculate patient-level aggregated results (mandatory requirement).
@@ -3580,7 +3627,9 @@ def calculate_patient_level_results(
                     break
             
             # Analyze certainty metrics at patient level
-            certainty_metrics = analyze_certainty_metrics(data['full_predictions'], step_name)
+            certainty_metrics = analyze_certainty_metrics(
+                data['full_predictions'], step_name, calibration_temperature=calibration_temperature
+            )
             
             # Analyze overconfidence at patient level
             # NOTE: data['full_predictions'] should contain ONE entry per patient (aggregated from slices)
@@ -3597,7 +3646,9 @@ def calculate_patient_level_results(
             patient_step_results[step_name] = {
                 'accuracy': 0.0,
                 'num_samples': 0,
-                'certainty_metrics': analyze_certainty_metrics([], step_name),
+                'certainty_metrics': analyze_certainty_metrics(
+                    [], step_name, calibration_temperature=calibration_temperature
+                ),
                 'overconfidence_metrics': analyze_overconfidence([], step_name),
                 'full_predictions': [],
             }

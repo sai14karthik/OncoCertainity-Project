@@ -1020,6 +1020,9 @@ def main():
         # Evaluate results
         if not results:
             print("Warning: No results to evaluate. Check if images were processed successfully.", file=sys.stderr, flush=True)
+            if args.run_both_orders and run_idx + 1 < len(orders):
+                print("Skipping to next modality order.", flush=True)
+                continue
             return
         
         # Count results by modality
@@ -1062,10 +1065,15 @@ def main():
                 step_counts[step_name] += 1
     
         try:
-            evaluation_results = evaluate_sequential_modalities(results, modalities)
+            evaluation_results = evaluate_sequential_modalities(
+                results, modalities, calibration_temperature=args.temperature
+            )
         except Exception as e:
             print(f"ERROR: Failed to evaluate results: {e}", file=sys.stderr, flush=True)
             traceback.print_exc()
+            if args.run_both_orders and run_idx + 1 < len(orders):
+                print("Continuing with next modality order after evaluation failure.", flush=True)
+                continue
             return
     
         # Add patient-level analysis if we have multiple modalities
