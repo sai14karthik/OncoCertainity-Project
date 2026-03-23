@@ -1,6 +1,8 @@
 #!/bin/bash
 # Submit a single model for medical imaging evaluation (both forward and reverse orders)
 # Usage: ./submit_single_model.sh <model_name> <model_arch> <data_root> <dataset_config> <class1> <class2> [--max_samples N] [modality1] [modality2] ...
+# Optional env: SLURM_JOB_LABEL="openai-base"  -> short job name in squeue and output_openai-base_%j.log
+#
 # Example: ./submit_single_model.sh microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224 clip data data/dataset_config.yaml high_grade low_grade CT PET
 #          ./submit_single_model.sh openai/clip-vit-base-patch32 clip . data/cmb_aml_config.yaml class0 class1 --max_samples 100 CT XA MR
 
@@ -52,10 +54,17 @@ fi
 
 MODALITIES=("$@")
 
-# Create job name from model name (sanitize for SLURM)
-# SLURM job names are limited to 64 characters and can only contain alphanumeric and underscores
-# Use a shorter, simpler name to avoid issues
-JOB_NAME=$(echo "$MODEL_NAME" | sed 's/.*\///' | sed 's/[^a-zA-Z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g' | cut -c1-40)
+# SLURM job name (squeue / log file prefix). Prefer a short unique label when set.
+# Usage: SLURM_JOB_LABEL=openai-base ./submit_single_model.sh ...
+# Allowed: letters, digits, hyphens, underscores (max 60 chars for SBATCH).
+if [[ -n "${SLURM_JOB_LABEL:-}" ]]; then
+  JOB_NAME=$(echo "$SLURM_JOB_LABEL" | tr ' ' '_' | sed 's/[^a-zA-Z0-9_-]/_/g' | sed 's/__*/_/g' | sed 's/^_\|_$//g' | cut -c1-60)
+else
+  JOB_NAME=$(echo "$MODEL_NAME" | sed 's/.*\///' | sed 's/[^a-zA-Z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g' | cut -c1-40)
+fi
+if [[ -z "$JOB_NAME" ]]; then
+  JOB_NAME="model_job"
+fi
 
 MOD1="${MODALITIES[0]}"
 MOD2="${MODALITIES[1]}"
@@ -70,6 +79,9 @@ MOD_SUFFIX_REVERSE=$(IFS='_'; echo "${REVERSED_MODALITIES[*]}")
 
 echo "Submitting single model: $MODEL_NAME"
 echo "Architecture: $MODEL_ARCH"
+if [[ -n "${SLURM_JOB_LABEL:-}" ]]; then
+  echo "SLURM job label: $SLURM_JOB_LABEL -> job name: $JOB_NAME"
+fi
 echo "Data root: $DATA_ROOT"
 echo "Dataset config: $DATASET_CONFIG"
 echo "Classes: $CLASS1, $CLASS2"

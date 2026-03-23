@@ -10,6 +10,10 @@
 # Override paths (optional):
 #   DATA_ROOT=... DATASET_CONFIG=... ./submit_all10_models_data1.sh
 #
+# Default data (lung): <repo>/Lung-PET-CT-Dx-PNG — e.g. on Mac:
+#   /Users/.../Multi Modal AI/Lung-PET-CT-Dx-PNG
+# On Newton: ~/Multi-Modal-AI/Lung-PET-CT-Dx-PNG (rsync dataset separately; sync_to_newton.sh excludes it).
+#
 # Requires: submit_single_model.sh, SLURM (sbatch) on Newton.
 
 set -euo pipefail
@@ -26,9 +30,9 @@ if [[ "$PRESET" == "kirp" || "$PRESET" == "data2" || "$PRESET" == "TCGA-KIRP" ]]
   MODALITIES=("CT" "MR" "PT")
   DATASET_LABEL="data2/TCGA-KIRP (early_stage vs advanced_stage)"
 else
-  # lung | Lung-PET-CT-Dx | png — PNG dataset root
-  DATA_ROOT="${DATA_ROOT:-Lung-PET-CT-Dx-PNG}"
-  DATASET_CONFIG="${DATASET_CONFIG:-configs/lung_pet_ct_dx_png.yaml}"
+  # lung | Lung-PET-CT-Dx | png — PNG dataset root (absolute path under this repo)
+  DATA_ROOT="${DATA_ROOT:-${SCRIPT_DIR}/Lung-PET-CT-Dx-PNG}"
+  DATASET_CONFIG="${DATASET_CONFIG:-configs/lung_pet_ct_dx.yaml}"
   CLASS1="non_small_cell"
   CLASS2="small_cell"
   MODALITIES=("CT" "PT")
@@ -42,7 +46,9 @@ if [[ ! -f "$DATASET_CONFIG" ]]; then
 fi
 
 if [[ ! -d "$DATA_ROOT" ]]; then
-  echo "Warning: data root not found: $DATA_ROOT (jobs may fail on cluster if path differs)." >&2
+  echo "Error: data root not found: $DATA_ROOT" >&2
+  echo "  Place Lung-PET-CT-Dx-PNG next to this script or set DATA_ROOT=/path/to/Lung-PET-CT-Dx-PNG" >&2
+  exit 1
 fi
 
 echo "=========================================="
@@ -54,30 +60,32 @@ echo "Classes: $CLASS1, $CLASS2"
 echo "Modalities: ${MODALITIES[*]}"
 echo ""
 
-# 10 models: "HF_model_id:arch"  (arch = clip | llava | llava_med)
-# Edit this list to match your experiments.
+# 10 models: "HF_model_id:arch:slurm_label"  (slurm_label = squeue NAME / log prefix)
+#   SLURM_JOB_LABEL is set so jobs are not all named clip-vit / CLIP-ViT.
 declare -a MODEL_ENTRIES=(
-  "openai/clip-vit-base-patch32:clip"
-  "openai/clip-vit-base-patch16:clip"
-  "openai/clip-vit-large-patch14:clip"
-  "openai/clip-vit-large-patch14-336:clip"
-  "openai/clip-vit-huge-patch14:clip"
-  "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224:clip"
-  "google/siglip-base-patch16-224:clip"
-  "google/siglip-large-patch16-256:clip"
-  "google/siglip-so400m-patch14-384:clip"
-  "google/siglip-large-patch16-384:clip"
+  "apple/DFN5B-CLIP-ViT-H-14:clip:apple-dfn"
+  "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224:clip:biomedclip"
+  "google/siglip-base-patch16-224:clip:google-siglip"
+  "laion/CLIP-ViT-H-14-laion2B-s32B-b79K:clip:laion-huge"
+  "microsoft/llava-med-v1.5-mistral-7b:llava_med:llava-med"
+  "facebook/metaclip-2-worldwide-b16-384:clip:meta-clip"
+  "openai/clip-vit-large-patch14-336:clip:openai-336"
+  "openai/clip-vit-base-patch32:clip:openai-base"
+  "openai/clip-vit-large-patch14:clip:openai-large"
+  "flaviagiammarino/pubmed-clip-vit-base-patch32:clip:pubmed-clip"
 )
 
 i=0
 for entry in "${MODEL_ENTRIES[@]}"; do
   i=$((i + 1))
   MODEL_NAME="${entry%%:*}"
-  MODEL_ARCH="${entry##*:}"
+  REST="${entry#"${MODEL_NAME}":}"
+  MODEL_ARCH="${REST%%:*}"
+  SLURM_LABEL="${REST#*:}"
   echo "------------------------------------------"
-  echo "[$i/10] $MODEL_NAME ($MODEL_ARCH)"
+  echo "[$i/10] $SLURM_LABEL — $MODEL_NAME ($MODEL_ARCH)"
   echo "------------------------------------------"
-  ./submit_single_model.sh \
+  SLURM_JOB_LABEL="$SLURM_LABEL" ./submit_single_model.sh \
     "$MODEL_NAME" \
     "$MODEL_ARCH" \
     "$DATA_ROOT" \

@@ -1,5 +1,6 @@
+# Lung-PET-CT-Dx (DICOM) and Lung-PET-CT-Dx-PNG (same folder layout after conversion).
 # Binary: A,G,E -> non_small_cell (0), B -> small_cell (1)
-# Final layout: CT/non_small_cell, CT/small_cell, PT/non_small_cell, PT/small_cell
+# Layout: CT/{non_small_cell,small_cell}, PT/{non_small_cell,small_cell}, pipeline_metadata.csv at DATA_ROOT.
 dataset_name: Lung-PET-CT-Dx
 
 modalities:

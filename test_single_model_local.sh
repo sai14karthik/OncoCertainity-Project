@@ -1,58 +1,105 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test a single model locally on sample data (both forward and reverse orders)
-# Usage: ./test_single_model_local.sh <model_name> <model_arch> <data_root> <dataset_config> <class1> <class2> [--max_samples N] [modality1] [modality2] ...
-# Example: ./test_single_model_local.sh openai/clip-vit-base-patch32 clip data data/dataset_config.yaml high_grade low_grade --max_samples 10 CT PET
-#          ./test_single_model_local.sh openai/clip-vit-base-patch32 clip data2 data2/tcga_kirp_config.yaml early_stage advanced_stage --max_samples 10 CT MR
+#
+# --- Lung PNG (Lung-PET-CT-Dx-PNG) shortcut ---
+#   ./test_single_model_local.sh lung <model_name> <model_arch> [--max_samples N] [CT PT]
+#   Optional env overrides (same as submit_all10_models_data1.sh):
+#     DATA_ROOT=/path/to/Lung-PET-CT-Dx-PNG DATASET_CONFIG=configs/lung_pet_ct_dx.yaml ...
+#
+# --- Full form (any dataset) ---
+#   ./test_single_model_local.sh <model_name> <model_arch> <data_root> <dataset_config> <class1> <class2> [--max_samples N] [modality1] [modality2] ...
+#
+# Examples:
+#   ./test_single_model_local.sh lung openai/clip-vit-base-patch32 clip
+#   ./test_single_model_local.sh lung openai/clip-vit-base-patch32 clip --max_samples 20 CT PT
+#   ./test_single_model_local.sh openai/clip-vit-base-patch32 clip data data/dataset_config.yaml high_grade low_grade --max_samples 10 CT PET
+#   ./test_single_model_local.sh openai/clip-vit-base-patch32 clip data2 data2/tcga_kirp_config.yaml early_stage advanced_stage CT MR
 
-# Parse arguments
-if [ $# -lt 6 ]; then
+set -euo pipefail
+
+# Always run from repo root so relative paths (data_root, dataset_config, src.main) work
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+usage_full() {
     echo "Usage: $0 <model_name> <model_arch> <data_root> <dataset_config> <class1> <class2> [--max_samples N] [modality1] [modality2] ..."
     echo ""
-    echo "Arguments:"
+    echo "Lung-PET-CT-Dx-PNG shortcut:"
+    echo "  $0 lung <model_name> <model_arch> [--max_samples N] [CT PT]"
+    echo "  Uses DATA_ROOT=\${DATA_ROOT:-Lung-PET-CT-Dx-PNG}, configs/lung_pet_ct_dx.yaml,"
+    echo "  classes non_small_cell vs small_cell (override DATA_ROOT / DATASET_CONFIG if needed)."
+    echo ""
+    echo "Arguments (full form):"
     echo "  model_name:     HuggingFace model name (e.g., openai/clip-vit-base-patch32)"
     echo "  model_arch:     Model architecture (clip, llava, llava_med)"
-    echo "  data_root:      Root directory for data (e.g., data or .)"
-    echo "  dataset_config: Path to dataset config YAML (e.g., data/dataset_config.yaml)"
-    echo "  class1:         First class name (e.g., high_grade or class0)"
-    echo "  class2:         Second class name (e.g., low_grade or class1)"
-    echo "  --max_samples:  (Optional) Maximum number of images per patient per modality (default: 10 for local testing)"
-    echo "  modalities:     Two or more modality names (e.g., CT PET or CT XA MR)"
-    echo ""
-    echo "Examples:"
-    echo "  $0 openai/clip-vit-base-patch32 clip data data/dataset_config.yaml high_grade low_grade --max_samples 10 CT PET"
-    echo "  $0 microsoft/llava-med-v1.5-mistral-7b llava_med data data/dataset_config.yaml class0 class1 --max_samples 5 CT PET"
-    exit 1
-fi
+    echo "  data_root:      Root directory for data (relative to this repo or absolute)"
+    echo "  dataset_config: Path to dataset config YAML"
+    echo "  class1, class2: Class folder names in the config"
+    echo "  --max_samples:  (Optional) Max images per patient per modality (default: 10)"
+    echo "  modalities:     Two or more modality names (config must define them; lung uses CT PT)"
+}
 
-MODEL_NAME="$1"
-MODEL_ARCH="$2"
-DATA_ROOT="$3"
-DATASET_CONFIG="$4"
-CLASS1="$5"
-CLASS2="$6"
-shift 6
-
-# Parse optional --max_samples flag
-MAX_SAMPLES="10"  # Default to 10 for local testing
-if [ "$1" == "--max_samples" ]; then
-    if [ -z "$2" ] || ! [[ "$2" =~ ^[0-9]+$ ]]; then
-        echo "Error: --max_samples requires a number"
+# Optional preset: lung | png | Lung-PET-CT-Dx-PNG
+LUNG_PRESET=0
+if [[ "${1:-}" == "lung" || "${1:-}" == "png" || "${1:-}" == "Lung-PET-CT-Dx-PNG" ]]; then
+    LUNG_PRESET=1
+    shift
+    if [ $# -lt 2 ]; then
+        usage_full
         exit 1
     fi
-    MAX_SAMPLES="$2"
+    MODEL_NAME="$1"
+    MODEL_ARCH="$2"
     shift 2
+    DATA_ROOT="${DATA_ROOT:-Lung-PET-CT-Dx-PNG}"
+    DATASET_CONFIG="${DATASET_CONFIG:-configs/lung_pet_ct_dx.yaml}"
+    CLASS1="non_small_cell"
+    CLASS2="small_cell"
+else
+    if [ $# -lt 6 ]; then
+        usage_full
+        echo ""
+        echo "Examples:"
+        echo "  $0 lung openai/clip-vit-base-patch32 clip"
+        echo "  $0 openai/clip-vit-base-patch32 clip data data/dataset_config.yaml high_grade low_grade --max_samples 10 CT PET"
+        exit 1
+    fi
+    MODEL_NAME="$1"
+    MODEL_ARCH="$2"
+    DATA_ROOT="$3"
+    DATASET_CONFIG="$4"
+    CLASS1="$5"
+    CLASS2="$6"
+    shift 6
 fi
 
-# Get modalities from remaining arguments
-if [ $# -lt 2 ]; then
-    echo "Error: Please provide at least 2 modalities"
+# Parse remaining args: optional --max_samples anywhere; rest are modalities
+MAX_SAMPLES="10"
+MODALITIES=()
+while [ $# -gt 0 ]; do
+    if [ "$1" = "--max_samples" ]; then
+        if [ -z "${2:-}" ] || ! [[ "$2" =~ ^[0-9]+$ ]]; then
+            echo "Error: --max_samples requires a positive integer"
+            exit 1
+        fi
+        MAX_SAMPLES="$2"
+        shift 2
+    else
+        MODALITIES+=("$1")
+        shift
+    fi
+done
+
+# Lung preset: default modalities CT + PT (folder names in configs/lung_pet_ct_dx.yaml)
+if [[ "$LUNG_PRESET" -eq 1 ]] && [ ${#MODALITIES[@]} -eq 0 ]; then
+    MODALITIES=("CT" "PT")
+fi
+
+if [ ${#MODALITIES[@]} -lt 2 ]; then
+    echo "Error: Please provide at least 2 modalities (or use the lung preset without extra modality args to default to CT PT)"
     exit 1
 fi
 
-MODALITIES=("$@")
-
-MOD1="${MODALITIES[0]}"
-MOD2="${MODALITIES[1]}"
 MOD_SUFFIX_FORWARD=$(IFS='_'; echo "${MODALITIES[*]}")
 
 # Build reversed modalities array for display and execution
@@ -79,25 +126,33 @@ echo ""
 # Check if data directory exists
 if [ ! -d "$DATA_ROOT" ]; then
     echo "Error: Data root directory not found: $DATA_ROOT"
-    echo "   Please create the directory or specify a different path"
+    echo "  (Resolved from repo root: $SCRIPT_DIR)"
+    echo ""
+    echo "  Restore or recreate Lung-PET-CT-Dx-PNG (PNG dataset), or set DATA_ROOT to where it lives, e.g.:"
+    echo "    DATA_ROOT=/path/to/Lung-PET-CT-Dx-PNG $0 lung <model> <arch>"
+    echo ""
+    echo "  For TCGA-KIRP you typically need:"
+    echo "    $SCRIPT_DIR/data2/TCGA-KIRP/   (large; not in git) — see data2/README.md"
+    echo ""
+    echo "  Full form with any dataset:"
+    echo "    $0 <model> <arch> /path/to/your_dataset your_config.yaml class1 class2 CT MR"
     exit 1
 fi
 
 # Check if dataset config exists
 if [ ! -f "$DATASET_CONFIG" ]; then
     echo "Warning: Dataset config not found: $DATASET_CONFIG"
-    echo "   Will use default config"
+    echo "  Python may error if a config is required for your dataset layout."
 fi
 
-# Build max_samples argument
-MAX_SAMPLES_ARG="--max_samples ${MAX_SAMPLES}"
+MAX_SAMPLES_ARG=(--max_samples "${MAX_SAMPLES}")
 
 echo "=========================================="
 echo "Running BOTH orders in one command: ${MOD_SUFFIX_FORWARD} and ${MOD_SUFFIX_REVERSE}"
 echo "=========================================="
 python3 -u -m src.main \
     --data_root "${DATA_ROOT}" \
-    --modalities ${MODALITIES[*]} \
+    --modalities "${MODALITIES[@]}" \
     --run_both_orders \
     --model_arch "${MODEL_ARCH}" \
     --model_name "${MODEL_NAME}" \
@@ -107,7 +162,7 @@ python3 -u -m src.main \
     --class_names "${CLASS1}" "${CLASS2}" \
     --temperature 0.8 \
     --no_progress \
-    ${MAX_SAMPLES_ARG}
+    "${MAX_SAMPLES_ARG[@]}"
 
 EXIT_CODE=$?
 

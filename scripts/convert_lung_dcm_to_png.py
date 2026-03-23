@@ -150,7 +150,6 @@ def convert_one(dcm_path: Path, png_path: Path, use_pil: bool = True, use_projec
             if CV2_AVAILABLE:
                 pix = cv2.resize(pix, (size, size), interpolation=cv2.INTER_LINEAR)
             else:
-                from PIL import Image
                 img = Image.fromarray((pix * 255).astype(np.uint8), mode="L")
                 img = img.resize((size, size), Image.Resampling.LANCZOS)
                 pix = np.asarray(img) / 255.0
