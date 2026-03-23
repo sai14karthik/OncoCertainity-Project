@@ -1,6 +1,4 @@
-#!/bin/bash
-# Sync code changes to Newton cluster
-# Usage: ./sync_to_newton.sh
+
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -9,7 +7,6 @@ cd "$SCRIPT_DIR"
 echo "Syncing code to Newton..."
 echo ""
 
-# Sync repo contents while excluding large datasets, results, and local env files.
 rsync -avz --progress \
   --exclude 'Lung-PET-CT-Dx-PNG/' \
   --exclude 'Lung-PET-CT-Dx-PNG-run/' \

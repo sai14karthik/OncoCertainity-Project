@@ -1,10 +1,4 @@
-#!/bin/bash
-# Test a single model on Newton with full data2/TCGA-KIRP dataset
-# Usage: ./test_single_model_newton.sh <model_name> <model_arch> [modality1] [modality2] ...
-# Example: ./test_single_model_newton.sh microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224 clip CT MR
-#          ./test_single_model_newton.sh openai/clip-vit-base-patch32 clip CT MR PT
 
-# Parse arguments
 if [ $# -lt 3 ]; then
     echo "Usage: $0 <model_name> <model_arch> [modality1] [modality2] ..."
     echo ""

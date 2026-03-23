@@ -1,12 +1,4 @@
-#!/bin/bash
-# Submit a single model for medical imaging evaluation (both forward and reverse orders)
-# Usage: ./submit_single_model.sh <model_name> <model_arch> <data_root> <dataset_config> <class1> <class2> [--max_samples N] [modality1] [modality2] ...
-# Optional env: SLURM_JOB_LABEL="openai-base"  -> short job name in squeue and output_openai-base_%j.log
-#
-# Example: ./submit_single_model.sh microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224 clip data data/dataset_config.yaml high_grade low_grade CT PET
-#          ./submit_single_model.sh openai/clip-vit-base-patch32 clip . data/cmb_aml_config.yaml class0 class1 --max_samples 100 CT XA MR
 
-# Parse arguments
 if [ $# -lt 6 ]; then
     echo "Usage: $0 <model_name> <model_arch> <data_root> <dataset_config> <class1> <class2> [--max_samples N] [modality1] [modality2] ..."
     echo ""

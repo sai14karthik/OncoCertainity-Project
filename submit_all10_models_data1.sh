@@ -1,20 +1,3 @@
-#!/bin/bash
-# Submit 10 vision-language models for sequential evaluation (forward + reverse via submit_single_model.sh).
-#
-# data1 = Lung-PET-CT-Dx-PNG (fast PNG I/O). Raw DICOM tree is Lung-PET-CT-Dx (not used here).
-#
-# Usage:
-#   ./submit_all10_models_data1.sh              # DEFAULT: Lung-PET-CT-Dx-PNG, CT+PT, non_small_cell vs small_cell
-#   ./submit_all10_models_data1.sh kirp         # TCGA-KIRP (data2): CT MR PT, early_stage vs advanced_stage
-#
-# Override paths (optional):
-#   DATA_ROOT=... DATASET_CONFIG=... ./submit_all10_models_data1.sh
-#
-# Default data (lung): <repo>/Lung-PET-CT-Dx-PNG — e.g. on Mac:
-#   /Users/.../Multi Modal AI/Lung-PET-CT-Dx-PNG
-# On Newton: ~/Multi-Modal-AI/Lung-PET-CT-Dx-PNG (rsync dataset separately; sync_to_newton.sh excludes it).
-#
-# Requires: submit_single_model.sh, SLURM (sbatch) on Newton.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

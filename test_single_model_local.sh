@@ -1,19 +1,3 @@
-#!/usr/bin/env bash
-# Test a single model locally on sample data (both forward and reverse orders)
-#
-# --- Lung PNG (Lung-PET-CT-Dx-PNG) shortcut ---
-#   ./test_single_model_local.sh lung <model_name> <model_arch> [--max_samples N] [CT PT]
-#   Optional env overrides (same as submit_all10_models_data1.sh):
-#     DATA_ROOT=/path/to/Lung-PET-CT-Dx-PNG DATASET_CONFIG=configs/lung_pet_ct_dx.yaml ...
-#
-# --- Full form (any dataset) ---
-#   ./test_single_model_local.sh <model_name> <model_arch> <data_root> <dataset_config> <class1> <class2> [--max_samples N] [modality1] [modality2] ...
-#
-# Examples:
-#   ./test_single_model_local.sh lung openai/clip-vit-base-patch32 clip
-#   ./test_single_model_local.sh lung openai/clip-vit-base-patch32 clip --max_samples 20 CT PT
-#   ./test_single_model_local.sh openai/clip-vit-base-patch32 clip data data/dataset_config.yaml high_grade low_grade --max_samples 10 CT PET
-#   ./test_single_model_local.sh openai/clip-vit-base-patch32 clip data2 data2/tcga_kirp_config.yaml early_stage advanced_stage CT MR
 
 set -euo pipefail
 
