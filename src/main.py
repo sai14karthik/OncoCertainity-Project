@@ -187,7 +187,8 @@ tqdm_kwargs = {
 
 from src.data.config import load_dataset_config
 from src.data.dataloader import get_all_images_by_modality
-from src.models.model_wrapper import MultimodalModelWrapper
+# MultimodalModelWrapper is imported only for model_arch=clip (see below). LLaVA / LLaVA-Med use
+# separate runners and must not require model_wrapper.py to parse at import time.
 from src.utils.evaluation import (
     evaluate_sequential_modalities,
     print_evaluation_results,
@@ -457,6 +458,8 @@ def main():
             flip_predictions=getattr(args, 'llava_med_flip_predictions', False),
         )
     else:
+        from src.models.model_wrapper import MultimodalModelWrapper
+
         model = MultimodalModelWrapper(
             model_name=args.model_name,
             device=device,

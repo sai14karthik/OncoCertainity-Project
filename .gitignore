@@ -45,7 +45,9 @@ checkpoints/
 # Large local datasets at repo root (do not commit)
 /Lung-PET-CT-Dx/
 /Lung-PET-CT-Dx-PNG/
+/Lung-PET-CT-Dx_PNG/
 /manifest-*/
+pipeline_metadata.csv
 
 # Data directories (large files)
 # data/

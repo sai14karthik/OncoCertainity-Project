@@ -142,7 +142,10 @@ class MultimodalModelWrapper:
                         # Import open_clip here to ensure it's available
                         import open_clip
                         with suppress_stderr():
-                            token_kwargs = {"token": self.hf_token} if self.hf_token else {}
+                            # open_clip.create_model_and_transforms() does not accept HF token
+                            # as a keyword arg on this version of open-clip-torch.
+                            # Rely on HF_TOKEN/HUGGING_FACE_HUB_TOKEN env vars set in main.py.
+                            token_kwargs = {}
                             # Use hf-hub: prefix for HuggingFace models
                             hf_model_name = f'hf-hub:{model_name}'
                             
@@ -495,11 +498,15 @@ class MultimodalModelWrapper:
         """
         first_class, second_class = self.class_names
         
-        # Determine current modality name for prompts (default to generic if not provided)
+        # Determine current modality name for prompts.
+        # NOTE: Many prompt templates below already add the word "scan"
+        # (e.g., "a {current_modality} scan showing ...").
+        # To avoid double text like "CT scan scan ...", keep this as just
+        # the modality token (e.g., "CT", "PT", "MR").
         if current_modality is None:
             current_modality = "scan"  # Generic fallback
         else:
-            current_modality = f"{current_modality} scan"  # e.g., "PET scan" or "CT scan"
+            current_modality = str(current_modality).strip()  # e.g., "PET", "CT"
         
         # Build context string if previous predictions are available
         # Simple concept: "hey CT gave this result, what's for PET?"
@@ -511,13 +518,16 @@ class MultimodalModelWrapper:
                 # Simple and clear: "the CT scan showed X"
                 context_parts.append(f"the {mod} scan showed {pred_class}")
         
-        context_prefix = ""
+            context_prefix = ""
         if context_parts:
             context_str = ", and ".join(context_parts)
             # Simple and direct: "Given that CT showed X, this PET scan shows..."
             # Generic: "Given that {previous_mod} showed X, this {current_mod} shows..."
             # This is the core concept: previous modality gave this result, what's for current modality?
-            context_prefix = f"Given that {context_str}, this {current_modality} shows "
+            # IMPORTANT: Many prompt templates below already append
+            # "{current_modality} shows ..." after this prefix.
+            # Keep the prefix short to avoid duplicated "... this CT shows CT shows ...".
+            context_prefix = f"Given that {context_str}, this "
 
         if self._default_classes:
             # Strategy 1: Direct descriptive prompts (for backward compatibility with "Healthy" vs "Tumor" classes)
@@ -871,19 +881,14 @@ class MultimodalModelWrapper:
             # Enhance sharpness slightly
             enhancer = ImageEnhance.Sharpness(image)
             image = enhancer.enhance(1.1)
-            
+
             # Apply histogram equalization for better visibility
-            # Convert to grayscale for histogram equalization
             gray = np.array(image.convert('L'))
-            # Apply histogram equalization
             equalized = ImageOps.equalize(Image.fromarray(gray))
-            # Convert back to RGB
             equalized_rgb = Image.new('RGB', equalized.size)
             equalized_rgb.paste(equalized)
-            
-            # Blend original (70%) with equalized (30%) to preserve natural look
             image = Image.blend(image, equalized_rgb, 0.3)
-        
+
         return image
     
     def predict(
@@ -1165,9 +1170,8 @@ class MultimodalModelWrapper:
                     # Current modality is not confident - still favor current modality (it has more information)
                     current_mod_boost_factor = 5.0   # Increased from 3.5
                     # DO NOT boost previous modality - trust current modality's informed judgment
-                
+
                 # Apply boost ONLY to current modality (not previous modality)
-                # current_mod_class_idx is always defined in this block (line 991)
                 probs[current_mod_class_idx] = probs[current_mod_class_idx] * current_mod_boost_factor
                 # Do NOT boost previous modality when current modality disagrees - this is key to improvement!
         
@@ -1175,11 +1179,11 @@ class MultimodalModelWrapper:
         probs = probs / probs.sum()
         
         # This strategy enables improvement:
-            # 1. When current modality agrees with previous modality: Massive boost locks in correct prediction
-            # 2. When current modality disagrees with previous modality: Trust current modality more (it has more information)
-            #    - Current modality has its own image + previous modality context in prompts
-            #    - Current modality can correct previous modality when it sees something previous modality missed
-            # Result: Sequential modality accuracy improves over single modality accuracy!
+        # 1. When current modality agrees with previous modality: Massive boost locks in correct prediction
+        # 2. When current modality disagrees with previous modality: Trust current modality more (it has more information)
+        #    - Current modality has its own image + previous modality context in prompts
+        #    - Current modality can correct previous modality when it sees something previous modality missed
+        # Result: Sequential modality accuracy improves over single modality accuracy!
         
         # Use the final prediction (after boosting if applicable)
         prediction = probs.argmax().item()

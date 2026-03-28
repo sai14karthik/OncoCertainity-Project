@@ -13,8 +13,7 @@ if [[ "$PRESET" == "kirp" || "$PRESET" == "data2" || "$PRESET" == "TCGA-KIRP" ]]
   MODALITIES=("CT" "MR" "PT")
   DATASET_LABEL="data2/TCGA-KIRP (early_stage vs advanced_stage)"
 else
-  # lung | Lung-PET-CT-Dx | png — PNG dataset root (absolute path under this repo)
-  DATA_ROOT="${DATA_ROOT:-${SCRIPT_DIR}/Lung-PET-CT-Dx-PNG}"
+  DATA_ROOT="${DATA_ROOT:-Lung-PET-CT-Dx-PNG}"
   DATASET_CONFIG="${DATASET_CONFIG:-configs/lung_pet_ct_dx.yaml}"
   CLASS1="non_small_cell"
   CLASS2="small_cell"
@@ -29,9 +28,7 @@ if [[ ! -f "$DATASET_CONFIG" ]]; then
 fi
 
 if [[ ! -d "$DATA_ROOT" ]]; then
-  echo "Error: data root not found: $DATA_ROOT" >&2
-  echo "  Place Lung-PET-CT-Dx-PNG next to this script or set DATA_ROOT=/path/to/Lung-PET-CT-Dx-PNG" >&2
-  exit 1
+  echo "Warning: data root not found: $DATA_ROOT (jobs may fail on cluster if path differs)." >&2
 fi
 
 echo "=========================================="
@@ -42,33 +39,63 @@ echo "DATASET_CONFIG=$DATASET_CONFIG"
 echo "Classes: $CLASS1, $CLASS2"
 echo "Modalities: ${MODALITIES[*]}"
 echo ""
+echo "Models (display names):"
+echo "  1. BioMedCLIP   2. LAION-CLIP   3. OpenAI CLIP (ViT-B/32)   4. OpenAI CLIP (ViT-L/14)   5. OpenAI CLIP (ViT-B/16)"
+echo "  6. PubMedCLIP   7. MetaCLIP   8. SigLIP (Google)   9. DFN (Apple)   10. LLaVA-Med"
+echo ""
 
-# 10 models: "HF_model_id:arch:slurm_label"  (slurm_label = squeue NAME / log prefix)
-#   SLURM_JOB_LABEL is set so jobs are not all named clip-vit / CLIP-ViT.
+declare -a MODEL_DISPLAY_NAMES=(
+  "BioMedCLIP"
+  "LAION-CLIP"
+  "OpenAI CLIP (ViT-B/32)"
+  "OpenAI CLIP (ViT-L/14)"
+  "OpenAI CLIP (ViT-B/16)"
+  "PubMedCLIP"
+  "MetaCLIP"
+  "SigLIP (Google)"
+  "DFN (Apple)"
+  "LLaVA-Med"
+)
+
+# HuggingFace:arch (clip | llava_med)
 declare -a MODEL_ENTRIES=(
-  "apple/DFN5B-CLIP-ViT-H-14:clip:apple-dfn"
-  "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224:clip:biomedclip"
-  "google/siglip-base-patch16-224:clip:google-siglip"
-  "laion/CLIP-ViT-H-14-laion2B-s32B-b79K:clip:laion-huge"
-  "microsoft/llava-med-v1.5-mistral-7b:llava_med:llava-med"
-  "facebook/metaclip-2-worldwide-b16-384:clip:meta-clip"
-  "openai/clip-vit-large-patch14-336:clip:openai-336"
-  "openai/clip-vit-base-patch32:clip:openai-base"
-  "openai/clip-vit-large-patch14:clip:openai-large"
-  "flaviagiammarino/pubmed-clip-vit-base-patch32:clip:pubmed-clip"
+  "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224:clip"
+  "laion/CLIP-ViT-B-32-laion2B-s34B-b79K:clip"
+  "openai/clip-vit-base-patch32:clip"
+  "openai/clip-vit-large-patch14:clip"
+  "openai/clip-vit-base-patch16:clip"
+  "sarahESL/PubMedCLIP:clip"
+  "facebook/metaclip-b32-fullcc2.5b:clip"
+  "google/siglip-base-patch16-224:clip"
+  "apple/DFN2B-CLIP-ViT-B-16:clip"
+  "microsoft/llava-med-v1.5-mistral-7b:llava_med"
+)
+
+declare -a SLURM_JOB_TAGS=(
+  "d1-BioMedCLIP"
+  "d1-LAION-CLIP"
+  "d1-OpenAI-CLIP-ViT-B-32"
+  "d1-OpenAI-CLIP-ViT-L-14"
+  "d1-OpenAI-CLIP-ViT-B-16"
+  "d1-PubMedCLIP"
+  "d1-MetaCLIP"
+  "d1-SigLIP-Google"
+  "d1-DFN-Apple"
+  "d1-LLaVA-Med"
 )
 
 i=0
-for entry in "${MODEL_ENTRIES[@]}"; do
-  i=$((i + 1))
+for idx in "${!MODEL_ENTRIES[@]}"; do
+  i=$((idx + 1))
+  entry="${MODEL_ENTRIES[$idx]}"
   MODEL_NAME="${entry%%:*}"
-  REST="${entry#"${MODEL_NAME}":}"
-  MODEL_ARCH="${REST%%:*}"
-  SLURM_LABEL="${REST#*:}"
+  MODEL_ARCH="${entry##*:}"
+  export SLURM_JOB_TAG="${SLURM_JOB_TAGS[$idx]}"
   echo "------------------------------------------"
-  echo "[$i/10] $SLURM_LABEL — $MODEL_NAME ($MODEL_ARCH)"
+  echo "[$i/10] ${MODEL_DISPLAY_NAMES[$idx]}"
+  echo "HuggingFace: $MODEL_NAME  |  arch=$MODEL_ARCH  |  SLURM job name: $SLURM_JOB_TAG"
   echo "------------------------------------------"
-  SLURM_JOB_LABEL="$SLURM_LABEL" ./submit_single_model.sh \
+  ./submit_single_model.sh \
     "$MODEL_NAME" \
     "$MODEL_ARCH" \
     "$DATA_ROOT" \
@@ -78,6 +105,7 @@ for entry in "${MODEL_ENTRIES[@]}"; do
     "${MODALITIES[@]}"
   echo ""
 done
+unset SLURM_JOB_TAG
 
 echo "=========================================="
 echo "All 10 submit_single_model jobs queued."

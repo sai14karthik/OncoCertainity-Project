@@ -23,7 +23,6 @@ MODEL_NAME="$1"
 MODEL_ARCH="$2"
 shift 2
 
-# Get modalities from remaining arguments
 if [ $# -lt 2 ]; then
     echo "Error: Please provide at least 2 modalities (e.g., CT MR)"
     exit 1
@@ -31,7 +30,6 @@ fi
 
 MODALITIES=("$@")
 
-# Fixed parameters for data2/TCGA-KIRP
 DATA_ROOT="data2"
 DATASET_CONFIG="data2/tcga_kirp_config.yaml"
 CLASS1="early_stage"
@@ -49,7 +47,6 @@ echo "Modalities: ${MODALITIES[*]}"
 echo "Full dataset (no --max_samples limit)"
 echo ""
 
-# Call submit_single_model.sh with full dataset (no --max_samples)
 ./submit_single_model.sh \
     "$MODEL_NAME" \
     "$MODEL_ARCH" \

@@ -1,7 +1,5 @@
-
 set -euo pipefail
 
-# Always run from repo root so relative paths (data_root, dataset_config, src.main) work
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
@@ -23,7 +21,6 @@ usage_full() {
     echo "  modalities:     Two or more modality names (config must define them; lung uses CT PT)"
 }
 
-# Optional preset: lung | png | Lung-PET-CT-Dx-PNG
 LUNG_PRESET=0
 if [[ "${1:-}" == "lung" || "${1:-}" == "png" || "${1:-}" == "Lung-PET-CT-Dx-PNG" ]]; then
     LUNG_PRESET=1
@@ -57,7 +54,6 @@ else
     shift 6
 fi
 
-# Parse remaining args: optional --max_samples anywhere; rest are modalities
 MAX_SAMPLES="10"
 MODALITIES=()
 while [ $# -gt 0 ]; do
@@ -74,7 +70,6 @@ while [ $# -gt 0 ]; do
     fi
 done
 
-# Lung preset: default modalities CT + PT (folder names in configs/lung_pet_ct_dx.yaml)
 if [[ "$LUNG_PRESET" -eq 1 ]] && [ ${#MODALITIES[@]} -eq 0 ]; then
     MODALITIES=("CT" "PT")
 fi

@@ -297,13 +297,13 @@ def evaluate_sequential_modalities(
     - How confidence changes across modalities (Mod1, Mod2, Mod1+Mod2, etc.)
     - Whether combining modalities increases or decreases certainty
     - Whether modality disagreement leads to lower confidence or unstable logits
-
+    
     Args:
         results: Dictionary with keys as case_ids and values as lists of predictions
                  Each prediction dict should have 'modalities_used', 'prediction', 'label',
                  'confidence', 'probabilities', and optionally 'logits'
         modalities: Ordered list of modalities supplied via CLI (supports N modalities)
-
+    
     Returns:
         Dictionary with certainty metrics for each step (accuracy included for reference only).
 
