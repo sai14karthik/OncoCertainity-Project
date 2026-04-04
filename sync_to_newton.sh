@@ -4,7 +4,7 @@ cd "$SCRIPT_DIR"
 
 REMOTE="${REMOTE:-sa808371@newton.ist.ucf.edu:~/Multi-Modal-AI/}"
 
-echo "Syncing code to Newton..."
+echo "Syncing code to Newton"
 echo "Remote: $REMOTE"
 echo ""
 

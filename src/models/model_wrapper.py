@@ -512,13 +512,12 @@ class MultimodalModelWrapper:
         # Simple concept: "hey CT gave this result, what's for PET?"
         # Make previous modality information clear and helpful for current modality prediction
         context_parts = []
+        context_prefix = ""  # Must always be defined (e.g. __init__ calls with no previous_predictions)
         if previous_predictions:
             for mod, pred_info in previous_predictions.items():
                 pred_class = pred_info.get('class_name', self.class_names[pred_info.get('prediction', 0)])
                 # Simple and clear: "the CT scan showed X"
                 context_parts.append(f"the {mod} scan showed {pred_class}")
-        
-            context_prefix = ""
         if context_parts:
             context_str = ", and ".join(context_parts)
             # Simple and direct: "Given that CT showed X, this PET scan shows..."
@@ -881,14 +880,14 @@ class MultimodalModelWrapper:
             # Enhance sharpness slightly
             enhancer = ImageEnhance.Sharpness(image)
             image = enhancer.enhance(1.1)
-
+            
             # Apply histogram equalization for better visibility
             gray = np.array(image.convert('L'))
             equalized = ImageOps.equalize(Image.fromarray(gray))
             equalized_rgb = Image.new('RGB', equalized.size)
             equalized_rgb.paste(equalized)
             image = Image.blend(image, equalized_rgb, 0.3)
-
+        
         return image
     
     def predict(

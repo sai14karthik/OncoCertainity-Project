@@ -3,6 +3,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
+
+export SLURM_TIME="${SLURM_TIME:-34:00:00}"
+
 PRESET="${1:-lung}"
 
 if [[ "$PRESET" == "kirp" || "$PRESET" == "data2" || "$PRESET" == "TCGA-KIRP" ]]; then
@@ -33,6 +36,7 @@ fi
 
 echo "=========================================="
 echo "Submitting 10 models — $DATASET_LABEL"
+echo "SLURM_TIME per job: $SLURM_TIME"
 echo "=========================================="
 echo "DATA_ROOT=$DATA_ROOT"
 echo "DATASET_CONFIG=$DATASET_CONFIG"

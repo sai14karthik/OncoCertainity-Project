@@ -1,10 +1,4 @@
-#!/bin/bash
-# Submit a single model for medical imaging evaluation (both forward and reverse orders)
-# Usage: ./submit_single_model.sh <model_name> <model_arch> <data_root> <dataset_config> <class1> <class2> [--max_samples N] [modality1] [modality2] ...
-# Example: ./submit_single_model.sh microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224 clip data data/dataset_config.yaml high_grade low_grade CT PET
-#          ./submit_single_model.sh openai/clip-vit-base-patch32 clip . data/cmb_aml_config.yaml class0 class1 --max_samples 100 CT XA MR
 
-# Parse arguments
 if [ $# -lt 6 ]; then
     echo "Usage: $0 <model_name> <model_arch> <data_root> <dataset_config> <class1> <class2> [--max_samples N] [modality1] [modality2] ..."
     echo ""
@@ -95,8 +89,12 @@ fi
 
 # REVERSED_MODALITIES array is already built above
 
+# Wall time for SLURM (override: SLURM_TIME=48:00:00 ./submit_single_model.sh ...)
+SLURM_TIME="${SLURM_TIME:-34:00:00}"
+
 # Submit single job with both orders
 echo "Submitting job with both orders (forward and reverse)..."
+echo "SLURM wall time: ${SLURM_TIME}"
 JOB_SCRIPT="submit_${JOB_NAME}_both_orders_tmp.sh"
 
 # Check if this is LLaVA-Med and needs dependency installation
@@ -106,7 +104,7 @@ if [ "${MODEL_ARCH}" == "llava_med" ]; then
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --partition=normal
 #SBATCH --gres=gpu:1
-#SBATCH --time=12:00:00
+#SBATCH --time=${SLURM_TIME}
 #SBATCH --output=output_${JOB_NAME}_%j.log
 #SBATCH --error=error_${JOB_NAME}_%j.log
 
@@ -159,7 +157,7 @@ else
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --partition=normal
 #SBATCH --gres=gpu:1
-#SBATCH --time=12:00:00
+#SBATCH --time=${SLURM_TIME}
 #SBATCH --output=output_${JOB_NAME}_%j.log
 #SBATCH --error=error_${JOB_NAME}_%j.log
 
