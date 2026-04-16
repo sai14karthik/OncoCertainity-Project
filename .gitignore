@@ -65,6 +65,9 @@ data2/TCGA-KIRP/
 # Data prep and one-off scripts directory (keep local only)
 scripts/
 
+# Tests (local only)
+tests/
+
 # Results and outputs
 results/
 result/
