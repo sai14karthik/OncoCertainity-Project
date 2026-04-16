@@ -59,6 +59,12 @@ data2/TCGA-KIRP/
 !data2/*.yaml
 !data2/*.csv
 
+# Shell scripts (local / cluster only; not versioned)
+*.sh
+
+# Data prep and one-off scripts directory (keep local only)
+scripts/
+
 # Results and outputs
 results/
 result/
@@ -119,4 +125,3 @@ submit_*_tmp.sh
 
 *.sh.tmp
 *.sh.temp
-*sh
