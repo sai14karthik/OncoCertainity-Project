@@ -4,7 +4,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
 
-export SLURM_TIME="${SLURM_TIME:-34:00:00}"
+export SLURM_TIME="${SLURM_TIME:-72:00:00}"
 
 PRESET="${1:-lung}"
 
@@ -61,7 +61,6 @@ declare -a MODEL_DISPLAY_NAMES=(
   "LLaVA-Med"
 )
 
-# HuggingFace:arch (clip | llava_med)
 declare -a MODEL_ENTRIES=(
   "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224:clip"
   "laion/CLIP-ViT-B-32-laion2B-s34B-b79K:clip"

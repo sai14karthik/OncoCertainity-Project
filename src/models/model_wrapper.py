@@ -37,6 +37,25 @@ except ImportError:
     pass
 
 
+class CombinedImageTextProcessor:
+    """HF image processor + tokenizer when AutoProcessor is unavailable (some BiomedCLIP checkpoints)."""
+
+    def __init__(self, image_processor, tokenizer):
+        self.image_processor = image_processor
+        self.tokenizer = tokenizer
+
+    def __call__(self, text=None, images=None, return_tensors=None, padding=None, **kwargs):
+        result = {}
+        if images is not None:
+            result.update(self.image_processor(images, return_tensors=return_tensors))
+        if text is not None:
+            text_result = self.tokenizer(
+                text, return_tensors=return_tensors, padding=padding, **kwargs
+            )
+            result.update(text_result)
+        return result
+
+
 class MultimodalModelWrapper:
     """
     CLIP model wrapper for sequential modality evaluation.
@@ -358,28 +377,19 @@ class MultimodalModelWrapper:
                             token_kwargs = {"token": self.hf_token} if self.hf_token else {}
                             self.model = AutoModel.from_pretrained(model_name, trust_remote_code=True, **token_kwargs).to(self.device)
                             try:
-                                self.processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True, **token_kwargs)
+                                self.processor = AutoProcessor.from_pretrained(
+                                    model_name, trust_remote_code=True, **token_kwargs
+                                )
                             except Exception:
-                                # If AutoProcessor fails, create a CombinedProcessor
-                                image_processor = AutoImageProcessor.from_pretrained(model_name, trust_remote_code=True, **token_kwargs)
-                                tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True, **token_kwargs)
-                                
-                            class CombinedProcessor:
-                                def __init__(self, image_processor, tokenizer):
-                                    self.image_processor = image_processor
-                                    self.tokenizer = tokenizer
-                                def __call__(self, text=None, images=None, return_tensors=None, padding=None, **kwargs):
-                                    result = {}
-                                    if images is not None:
-                                        result.update(self.image_processor(images, return_tensors=return_tensors))
-                                    if text is not None:
-                                        text_result = self.tokenizer(text, return_tensors=return_tensors, padding=padding, **kwargs)
-                                        result.update(text_result)
-                                    return result
-                                
-                            self.processor = CombinedProcessor(image_processor, tokenizer)
+                                image_processor = AutoImageProcessor.from_pretrained(
+                                    model_name, trust_remote_code=True, **token_kwargs
+                                )
+                                tokenizer = AutoTokenizer.from_pretrained(
+                                    model_name, trust_remote_code=True, **token_kwargs
+                                )
+                                self.processor = CombinedImageTextProcessor(image_processor, tokenizer)
                         loaded = True
-                        print(f"✓ Successfully loaded BiomedCLIP using AutoModel with CombinedProcessor: {model_name}")
+                        print(f"✓ Successfully loaded BiomedCLIP using AutoModel: {model_name}")
                     except Exception as e:
                         last_error = str(e)
                 

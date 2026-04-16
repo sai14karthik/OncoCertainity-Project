@@ -117,7 +117,7 @@ source venv/bin/activate
 
 # Install missing dependencies for LLaVA-Med
 echo "Installing LLaVA-Med dependencies..."
-pip install "transformers>=4.30.0,<4.38.0" accelerate>=0.20.0 "tiktoken>=0.5.0,<0.8.0" protobuf>=4.21.0 sentencepiece>=0.1.99
+pip install "transformers>=4.30.0,<4.38.0" "accelerate>=0.20.0" "tiktoken>=0.5.0,<0.8.0" "protobuf>=4.21.0" "sentencepiece>=0.1.99"
 echo "Dependencies installed successfully!"
 
 # Clear corrupted tokenizer cache

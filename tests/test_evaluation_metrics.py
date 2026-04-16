@@ -1,12 +1,8 @@
-"""
-Lightweight checks for evaluation metric consistency (no GPU, no HF).
-Run: python3 -m unittest tests.test_evaluation_metrics -v
-"""
+
 import os
 import sys
 import unittest
 
-# Project root on path
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
@@ -54,7 +50,7 @@ class TestExtractConfidence(unittest.TestCase):
     def test_entropy_binary_uniform(self):
         p = np.array([0.5, 0.5])
         h = calculate_entropy(p)
-        self.assertAlmostEqual(h, 1.0, places=5)  # 1 bit for fair coin
+        self.assertAlmostEqual(h, 1.0, places=5)  
 
 
 class TestCalibration(unittest.TestCase):
